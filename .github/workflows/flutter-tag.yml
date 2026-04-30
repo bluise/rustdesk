@@ -1,18 +1,45 @@
-name: Flutter Tag Build
+name: Build Windows Only
 
 on:
-  workflow_dispatch:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - '[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
-      - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+      - '*'
+
+permissions:
+  contents: write
 
 jobs:
-  run-flutter-tag-build:
-    uses: ./.github/workflows/flutter-build.yml
-    secrets: inherit
-    with:
-      upload-artifact: true
-      upload-tag: ${{ github.ref_name }}
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build windows --release
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-client
+          path: build/windows/x64/runner/Release/
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: build/windows/x64/runner/Release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
