@@ -86,6 +86,25 @@ fn install_android_deps() {
 }
 
 fn main() {
+    // Apply custom server patch to hbb_common if not already applied
+    {
+        let config_path = std::path::Path::new("libs/hbb_common/src/config.rs");
+        if config_path.exists() {
+            let content = std::fs::read_to_string(config_path).unwrap_or_default();
+            if content.contains("rs-ny.rustdesk.com") {
+                let patched = content
+                    .replace(
+                        "rs-ny.rustdesk.com",
+                        "38.147.190.50",
+                    )
+                    .replace(
+                        "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=",
+                        "J167wPpv7ZX8EM7U6ZszwWeionZJFnltGvWEQwsl2VHkX5va/kLbfxYrbaJEeefCEFbk1DXr4V4uybOYQpYUIA==",
+                    );
+                let _ = std::fs::write(config_path, patched);
+            }
+        }
+    }
     hbb_common::gen_version();
     install_android_deps();
     #[cfg(all(windows, feature = "inline"))]
