@@ -82,12 +82,23 @@ pub fn core_main() -> Option<Vec<String>> {
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if args.is_empty() {
+        let has_token = !hbb_common::config::LocalConfig::get_option("access_token").is_empty();
+        if has_token && !crate::check_process("--server", false) {
+            log::info!("token exists, starting in silent background mode");
+            #[cfg(target_os = "linux")]
+            {
+                hbb_common::allow_err!(crate::platform::check_autostart_config());
+                crate::start_server(true, false);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                crate::start_server(true, false);
+            }
+            return None;
+        }
         #[cfg(target_os = "linux")]
         let should_check_start_tray = crate::check_process("--server", false);
-        // We can use `crate::check_process("--server", false)` on Windows.
-        // Because `--server` process is the System user's process. We can't get the arguments in `check_process()`.
-        // We can assume that self service running means the server is also running on Windows.
-        #[cfg(target_os = "windows")]
+        #[cfg(windows)]
         let should_check_start_tray = crate::platform::is_self_service_running()
             && crate::platform::is_cur_exe_the_installed();
         if should_check_start_tray && !crate::check_process("--tray", true) {

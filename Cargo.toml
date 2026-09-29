@@ -51,7 +51,7 @@ screencapturekit = ["cpal/screencapturekit"]
 
 [dependencies]
 async-trait = "0.1"
-scrap = { path = "libs/scrap", features = ["wayland"] }
+scrap = { path = "libs/scrap" }
 hbb_common = { path = "libs/hbb_common", features = ["webrtc"] }
 base = { path = "libs/base" }
 serde_derive = "1.0"
@@ -185,6 +185,7 @@ bytemuck = "1.23"
 ttf-parser = "0.25"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+scrap = { path = "libs/scrap", features = ["wayland"] }
 libxdo-sys = "0.11"
 psimple = { package = "libpulse-simple-binding", version = "2.27" }
 pulse = { package = "libpulse-binding", version = "2.27" }
@@ -267,6 +268,8 @@ winapi = { version = "0.3", features = [ "winnt", "pdh", "synchapi" ] }
 cc = "1.0"
 hbb_common = { path = "libs/hbb_common" }
 os-version = "0.2"
+winapi = { version = "0.3", features = ["winnt"] }
+winres = "0.1"
 
 [dev-dependencies]
 hound = "3.5"

@@ -1119,7 +1119,7 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
     if !config::PROD_RENDEZVOUS_SERVER.read().unwrap().is_empty() {
         return config::PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
     }
-    "".to_owned()
+    "rustdesk.tangzhiguo.cn:21116".to_owned()
 }
 
 #[inline]
@@ -1130,12 +1130,6 @@ pub fn get_api_server(api: String, custom: String) -> String {
     let mut res = get_api_server_(api, custom);
     if res.ends_with('/') {
         res.pop();
-    }
-    if res.starts_with("https")
-        && res.ends_with(":21114")
-        && get_builtin_option(keys::OPTION_ALLOW_HTTPS_21114) != "Y"
-    {
-        return res.replace(":21114", "");
     }
     res
 }
@@ -1152,14 +1146,9 @@ fn get_api_server_(api: String, custom: String) -> String {
     }
     let s0 = get_custom_rendezvous_server(custom);
     if !s0.is_empty() {
-        let s = crate::increase_port(&s0, -2);
-        if s == s0 {
-            return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
-        } else {
-            return format!("http://{}", s);
-        }
+        return format!("https://rustdesk.tangzhiguo.cn:21114");
     }
-    "https://admin.rustdesk.com".to_owned()
+    "https://rustdesk.tangzhiguo.cn:21114".to_owned()
 }
 
 #[inline]

@@ -1,18 +1,12 @@
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-Ctarget-feature=+crt-static"]
-[target.i686-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/NODEFAULTLIB:MSVCRT"]
-[target.aarch64-pc-windows-msvc]
-rustflags = ["-Ctarget-feature=+crt-static"]
-[target.'cfg(target_os="macos")']
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"
 rustflags = [
-    "-C", "link-args=-sectcreate __CGPreLoginApp __cgpreloginapp /dev/null",
+    "-C", "link-args=-static-libgcc -static-libstdc++",
+    "-L", "/opt/vcpkg/installed/x64-mingw-static/lib",
+    "-L", "/opt/libs/native",
+    "-C", "link-args=-Wl,--start-group -lvpx -lyuv -lopus -laom -ljpeg -lwinpthread -lmingwex -lmingw32 -lmachine-uid -luuid -lole32 -loleaut32 -Wl,--end-group",
+    "-C", "link-arg=-lwindowscodecs",
+    "-C", "link-arg=-lwinmm",
+    "-C", "link-arg=-ldwmapi",
 ]
-#[target.'cfg(target_os="linux")']
-# glibc-static required, this may fix https://github.com/rustdesk/rustdesk/issues/9103, but I do not want this big change
-# this is unlikely to help also, because the other so files still use libc dynamically
-#rustflags = [
-#    "-C", "link-args=-Wl,-Bstatic -lc -Wl,-Bdynamic"
-#]
-[net]
-git-fetch-with-cli = true
