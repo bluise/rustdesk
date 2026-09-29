@@ -1,12 +1,9 @@
 use cc;
 
 fn build_c_impl() {
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os != "windows" {
-        return;
-    }
     let mut build = cc::Build::new();
 
+    #[cfg(target_os = "windows")]
     build.file("src/win10/IddController.c");
 
     build.flag_if_supported("-Wno-c++0x-extensions");
@@ -20,14 +17,16 @@ fn build_c_impl() {
         build.flag("-GR-");
         // build.flag("-std:c++11");
     } else {
-        // build.flag("-fPIC");
+        build.flag("-fPIC");
         // build.flag("-std=c++11");
         // build.flag("-include");
         // build.flag(&confdefs_path.to_string_lossy());
     }
 
+    #[cfg(target_os = "windows")]
     build.compile("win_virtual_display");
 
+    #[cfg(target_os = "windows")]
     println!("cargo:rerun-if-changed=src/win10/IddController.c");
 }
 

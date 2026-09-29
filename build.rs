@@ -1,10 +1,11 @@
+#[cfg(windows)]
 fn build_windows() {
-    let file = "src/platform/windows_stub.c";
-    cc::Build::new()
-        .file(file)
-        .compile("windows");
+    let file = "src/platform/windows.cc";
+    let file2 = "src/platform/windows_delete_test_cert.cc";
+    cc::Build::new().file(file).file(file2).compile("windows");
     println!("cargo:rustc-link-lib=WtsApi32");
     println!("cargo:rerun-if-changed={}", file);
+    println!("cargo:rerun-if-changed={}", file2);
 }
 
 #[cfg(target_os = "macos")]
@@ -21,15 +22,16 @@ fn build_mac() {
     println!("cargo:rerun-if-changed={}", file);
 }
 
+#[cfg(all(windows, feature = "inline"))]
 fn build_manifest() {
     use std::io::Write;
     if std::env::var("PROFILE").unwrap() == "release" {
         let mut res = winres::WindowsResource::new();
-        const LANG_ENGLISH: u16 = 0x09;
-        const SUBLANG_ENGLISH_US: u16 = 0x01;
-        const MAKELANGID: u16 = (SUBLANG_ENGLISH_US << 10) | LANG_ENGLISH;
         res.set_icon("res/icon.ico")
-            .set_language(MAKELANGID)
+            .set_language(winapi::um::winnt::MAKELANGID(
+                winapi::um::winnt::LANG_ENGLISH,
+                winapi::um::winnt::SUBLANG_ENGLISH_US,
+            ))
             .set_manifest_file("res/manifest.xml");
         match res.compile() {
             Err(e) => {
@@ -83,53 +85,14 @@ fn install_android_deps() {
     println!("cargo:rustc-link-lib=OpenSLES");
 }
 
-fn find_native_lib_dir(crate_name: &str) -> Option<String> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
-    let target_dir = std::path::Path::new(&manifest_dir)
-        .join("target")
-        .join("x86_64-pc-windows-gnu")
-        .join("release")
-        .join("build");
-    let lib_name = format!("lib{}.a", crate_name);
-    for entry in std::fs::read_dir(&target_dir).ok()?.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with(&format!("{}-", crate_name)) {
-            let out = entry.path().join("out");
-            if out.join(&lib_name).exists() {
-                return Some(out.to_string_lossy().to_string());
-            }
-        }
-    }
-    None
-}
-
 fn main() {
     hbb_common::gen_version();
     install_android_deps();
+    #[cfg(all(windows, feature = "inline"))]
+    build_manifest();
+    #[cfg(windows)]
+    build_windows();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-    if target_os == "windows" {
-        if cfg!(feature = "inline") {
-            build_manifest();
-        }
-        build_windows();
-        // Link vcpkg static libraries for Windows cross-compilation
-        let vcpkg_lib = "/opt/vcpkg/installed/x64-mingw-static/lib";
-        println!("cargo:rustc-link-search={}", vcpkg_lib);
-        println!("cargo:rustc-link-lib=static=vpx");
-        println!("cargo:rustc-link-lib=static=yuv");
-        println!("cargo:rustc-link-lib=static=opus");
-        println!("cargo:rustc-link-lib=static=aom");
-        println!("cargo:rustc-link-lib=static=jpeg");
-        // machine-uid crate's native lib is not propagated without `links` key
-        if let Some(dir) = find_native_lib_dir("machine-uid") {
-            println!("cargo:rustc-link-search=native={}", dir);
-            println!("cargo:rustc-link-lib=static=machine-uid");
-        }
-        // COM interface IID symbols (IID_IDataObject, IID_IStream, etc.)
-        println!("cargo:rustc-link-lib=uuid");
-        println!("cargo:rustc-link-lib=ole32");
-        println!("cargo:rustc-link-lib=oleaut32");
-    }
     if target_os == "macos" {
         #[cfg(target_os = "macos")]
         build_mac();
