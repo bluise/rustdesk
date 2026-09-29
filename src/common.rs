@@ -1146,9 +1146,9 @@ fn get_api_server_(api: String, custom: String) -> String {
     }
     let s0 = get_custom_rendezvous_server(custom);
     if !s0.is_empty() {
-        return format!("https://rustdesk.tangzhiguo.cn:21114");
+        return format!("https://{}", s0);
     }
-    "https://rustdesk.tangzhiguo.cn:21114".to_owned()
+    "https://rustdesk.tangzhiguo.cn".to_owned()
 }
 
 #[inline]
