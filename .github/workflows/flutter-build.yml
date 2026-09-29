@@ -1,6 +1,16 @@
 name: Build the flutter version of the RustDesk
 
 on:
+  workflow_dispatch:
+    inputs:
+      upload-artifact:
+        type: boolean
+        default: true
+        description: Upload build artifacts
+      upload-tag:
+        type: string
+        default: "custom-windows-v1.5.0"
+        description: Tag for upload
   workflow_call:
     inputs:
       upload-artifact:
