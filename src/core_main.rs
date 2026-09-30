@@ -188,7 +188,6 @@ pub fn core_main() -> Option<Vec<String>> {
     #[cfg(windows)]
     if !crate::platform::is_installed()
         && args.is_empty()
-        && _is_quick_support
         && !_is_elevate
         && !_is_run_as_system
     {
