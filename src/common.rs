@@ -1119,7 +1119,7 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
     if !config::PROD_RENDEZVOUS_SERVER.read().unwrap().is_empty() {
         return config::PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
     }
-    "rustdesk.tangzhiguo.cn:21116".to_owned()
+    "38.147.190.50".to_owned()
 }
 
 #[inline]
@@ -1146,7 +1146,8 @@ fn get_api_server_(api: String, custom: String) -> String {
     }
     let s0 = get_custom_rendezvous_server(custom);
     if !s0.is_empty() {
-        return format!("http://{}:21114", s0);
+        let host = s0.split(':').next().unwrap_or(&s0);
+        return format!("http://{}:21114", host);
     }
     "http://38.147.190.50:21114".to_owned()
 }
