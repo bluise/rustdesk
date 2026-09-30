@@ -2351,10 +2351,12 @@ pub fn load_custom_client() {
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
+        apply_forced_builtin_settings();
         return;
     }
     let Some(path) = std::env::current_exe().map_or(None, |x| x.parent().map(|x| x.to_path_buf()))
     else {
+        apply_forced_builtin_settings();
         return;
     };
     #[cfg(target_os = "macos")]
@@ -2363,10 +2365,20 @@ pub fn load_custom_client() {
     if path.is_file() {
         let Ok(data) = std::fs::read_to_string(&path) else {
             log::error!("Failed to read custom client config");
+            apply_forced_builtin_settings();
             return;
         };
         read_custom_client(&data.trim());
     }
+    apply_forced_builtin_settings();
+}
+
+fn apply_forced_builtin_settings() {
+    let mut settings = config::BUILTIN_SETTINGS.write().unwrap();
+    settings.insert(
+        keys::OPTION_HIDE_SERVER_SETTINGS.to_string(),
+        "Y".to_string(),
+    );
 }
 
 fn read_custom_client_advanced_settings(
