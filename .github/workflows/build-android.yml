@@ -13,7 +13,7 @@ env:
   CARGO_NDK_VERSION: "3.1.2"
   FLUTTER_VERSION: "3.24.5"
   ANDROID_FLUTTER_VERSION: "3.24.5"
-  TAG_NAME: "custom-windows-v1.5.0"
+  TAG_NAME: "custom-v1.5.0"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_CMAKE_VERSION: "4.3.0"
@@ -309,8 +309,9 @@ jobs:
           path: signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
 
       - name: Publish signed apk package
-        if: false
+        if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        continue-on-error: true
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
@@ -318,8 +319,9 @@ jobs:
             ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
       - name: Publish unsigned apk package
-        if: false
+        if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        continue-on-error: true
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
@@ -494,8 +496,9 @@ jobs:
           path: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
       - name: Publish signed apk package
-        if: false
+        if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        continue-on-error: true
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
@@ -503,8 +506,9 @@ jobs:
             ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
       - name: Publish unsigned apk package
-        if: false
+        if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        continue-on-error: true
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}

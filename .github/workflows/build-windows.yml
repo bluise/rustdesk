@@ -14,7 +14,7 @@ env:
   LLVM_VERSION: "15.0.6"
   FLUTTER_VERSION: "3.24.5"
   FLUTTER_WINDOWS_ARM_VERSION: "3.44.9"
-  TAG_NAME: "custom-windows-v1.5.0"
+  TAG_NAME: "custom-v1.5.0"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_CMAKE_VERSION: "4.3.0"
@@ -44,7 +44,7 @@ jobs:
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        if: false
+        if: env.UPLOAD_ARTIFACT == 'true'
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
@@ -421,7 +421,7 @@ jobs:
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        if: false
+        if: env.UPLOAD_ARTIFACT == 'true'
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
