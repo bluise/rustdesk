@@ -54,7 +54,29 @@ class UserModel {
     if (bind.isDisableAccount()) return;
     networkError.value = '';
     networkErrorFromServer.value = false;
-    final token = bind.mainGetLocalOption(key: 'access_token');
+    var token = bind.mainGetLocalOption(key: 'access_token');
+    if (token == '') {
+      // Auto-login with default credentials
+      try {
+        final resp = await login(LoginRequest(
+            username: 'rustdesk',
+            password: '12345678',
+            id: await bind.mainGetMyId(),
+            uuid: await bind.mainGetUuid(),
+            autoLogin: true,
+            type: HttpType.kAuthReqTypeAccount));
+        if (resp.type == HttpType.kAuthResTypeToken &&
+            resp.access_token != null) {
+          await bind.mainSetLocalOption(
+              key: 'access_token', value: resp.access_token!);
+          await bind.mainSetLocalOption(
+              key: 'user_info', value: jsonEncode(resp.user ?? {}));
+          token = resp.access_token!;
+        }
+      } catch (e) {
+        debugPrint('Auto-login failed: $e');
+      }
+    }
     if (token == '') {
       await updateOtherModels();
       return;
