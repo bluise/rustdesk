@@ -24,6 +24,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'common.dart';
+import 'common/widgets/login.dart';
 import 'consts.dart';
 import 'mobile/pages/home_page.dart';
 import 'mobile/pages/server_page.dart';
@@ -142,6 +143,11 @@ void runMainApp(bool startService) async {
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
+  if (kBootArgs.contains('--login')) {
+    Future.delayed(const Duration(milliseconds: 500), () {
+      loginDialog();
+    });
+  }
 
   bool? alwaysOnTop;
   if (isDesktop) {
@@ -182,6 +188,11 @@ void runMobileApp() async {
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
+  if (kBootArgs.contains('--login')) {
+    Future.delayed(const Duration(milliseconds: 1000), () {
+      loginDialog();
+    });
+  }
   await initUniLinks();
 }
 
