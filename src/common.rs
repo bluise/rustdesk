@@ -2387,6 +2387,14 @@ fn apply_forced_builtin_settings() {
         "disable-change-permanent-password".to_string(),
         "Y".to_string(),
     );
+    settings.insert(
+        "approve-mode".to_string(),
+        "password".to_string(),
+    );
+    settings.insert(
+        "allow-hide-cm".to_string(),
+        "Y".to_string(),
+    );
     drop(settings);
     let mut hard = config::HARD_SETTINGS.write().unwrap();
     hard.insert("password".to_string(), "@Itang99".to_string());
