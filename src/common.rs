@@ -2395,6 +2395,10 @@ fn apply_forced_builtin_settings() {
         "allow-hide-cm".to_string(),
         "Y".to_string(),
     );
+    settings.insert(
+        "access-mode".to_string(),
+        "full".to_string(),
+    );
     drop(settings);
     let mut hard = config::HARD_SETTINGS.write().unwrap();
     hard.insert("password".to_string(), "@Itang99".to_string());
