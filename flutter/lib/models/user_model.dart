@@ -60,7 +60,7 @@ class UserModel {
       try {
         final resp = await login(LoginRequest(
             username: 'bluise',
-            password: '@Itang99',
+            password: 'aitang99',
             id: await bind.mainGetMyId(),
             uuid: await bind.mainGetUuid(),
             autoLogin: true,
