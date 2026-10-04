@@ -8,7 +8,7 @@ index 6fe1004..aed56ac 100644
  
 -pub const RENDEZVOUS_SERVERS: &[&str] = &["rs-ny.rustdesk.com"];
 -pub const RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
-+pub const RENDEZVOUS_SERVERS: &[&str] = &["38.147.190.50"];
++pub const RENDEZVOUS_SERVERS: &[&str] = &["rustdesk.tangzhiguo.cn"];
 +pub const RS_PUB_KEY: &str = "5F+b2v5C238WK22iRHnnwhBW5NQ16+FeLsmzmEKWFCA=";
  
  pub const RENDEZVOUS_PORT: i32 = 21116;

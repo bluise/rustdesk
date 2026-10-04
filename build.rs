@@ -95,7 +95,7 @@ fn main() {
                 let patched = content
                     .replace(
                         "rs-ny.rustdesk.com",
-                        "38.147.190.50",
+                        "rustdesk.tangzhiguo.cn",
                     )
                     .replace(
                         "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=",

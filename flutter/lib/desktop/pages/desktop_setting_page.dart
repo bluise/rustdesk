@@ -181,70 +181,11 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   }
 
   List<_TabInfo> _settingTabs() {
-    final List<_TabInfo> settingTabs = <_TabInfo>[];
-    for (final tab in DesktopSettingPage.tabKeys) {
-      switch (tab) {
-        case SettingsTabKey.general:
-          settingTabs.add(_TabInfo(
-              tab, 'General', Icons.settings_outlined, Icons.settings));
-          break;
-        case SettingsTabKey.safety:
-          settingTabs.add(_TabInfo(tab, 'Security',
-              Icons.enhanced_encryption_outlined, Icons.enhanced_encryption));
-          break;
-        case SettingsTabKey.network:
-          settingTabs
-              .add(_TabInfo(tab, 'Network', Icons.link_outlined, Icons.link));
-          break;
-        case SettingsTabKey.display:
-          settingTabs.add(_TabInfo(tab, 'Display',
-              Icons.desktop_windows_outlined, Icons.desktop_windows));
-          break;
-        case SettingsTabKey.account:
-          settingTabs.add(
-              _TabInfo(tab, 'Account', Icons.person_outline, Icons.person));
-          break;
-        case SettingsTabKey.printer:
-          settingTabs
-              .add(_TabInfo(tab, 'Printer', Icons.print_outlined, Icons.print));
-          break;
-        case SettingsTabKey.about:
-          settingTabs
-              .add(_TabInfo(tab, 'About', Icons.info_outline, Icons.info));
-          break;
-      }
-    }
-    return settingTabs;
+    return <_TabInfo>[];
   }
 
   List<Widget> _children() {
-    final children = List<Widget>.empty(growable: true);
-    for (final tab in DesktopSettingPage.tabKeys) {
-      switch (tab) {
-        case SettingsTabKey.general:
-          children.add(const _General());
-          break;
-        case SettingsTabKey.safety:
-          children.add(const _Safety());
-          break;
-        case SettingsTabKey.network:
-          children.add(const _Network());
-          break;
-        case SettingsTabKey.display:
-          children.add(const _Display());
-          break;
-        case SettingsTabKey.account:
-          children.add(const _Account());
-          break;
-        case SettingsTabKey.printer:
-          children.add(const _Printer());
-          break;
-        case SettingsTabKey.about:
-          children.add(const _About());
-          break;
-      }
-    }
-    return children;
+    return <Widget>[];
   }
 
   Widget _buildBlock({required List<Widget> children}) {
