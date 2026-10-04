@@ -99,7 +99,7 @@ fn main() {
                     )
                     .replace(
                         "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=",
-                        "J167wPpv7ZX8EM7U6ZszwWeionZJFnltGvWEQwsl2VHkX5va/kLbfxYrbaJEeefCEFbk1DXr4V4uybOYQpYUIA==",
+                        "5F+b2v5C238WK22iRHnnwhBW5NQ16+FeLsmzmEKWFCA=",
                     );
                 let _ = std::fs::write(config_path, patched);
             }
