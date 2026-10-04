@@ -2221,9 +2221,7 @@ class _AccountState extends State<_Account> {
     final scrollController = ScrollController();
     return ListView(
       controller: scrollController,
-      children: [
-        _Card(title: 'Account', children: [accountAction(), useInfo()]),
-      ],
+      children: const [],
     ).marginOnly(bottom: _kListViewBottomMargin);
   }
 

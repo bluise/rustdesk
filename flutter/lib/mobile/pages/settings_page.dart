@@ -718,7 +718,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final settings = SettingsList(
       sections: [
         customClientSection,
-        if (!bind.isDisableAccount())
+        if (false && !bind.isDisableAccount())
           SettingsSection(
             title: Text(translate('Account')),
             tiles: [

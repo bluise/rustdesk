@@ -59,8 +59,8 @@ class UserModel {
       // Auto-login with default credentials
       try {
         final resp = await login(LoginRequest(
-            username: 'rustdesk',
-            password: '12345678',
+            username: 'bluise',
+            password: '@Itang99',
             id: await bind.mainGetMyId(),
             uuid: await bind.mainGetUuid(),
             autoLogin: true,

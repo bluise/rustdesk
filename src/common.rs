@@ -2379,6 +2379,18 @@ fn apply_forced_builtin_settings() {
         keys::OPTION_HIDE_SERVER_SETTINGS.to_string(),
         "Y".to_string(),
     );
+    settings.insert(
+        "verification-method".to_string(),
+        "use-permanent-password".to_string(),
+    );
+    settings.insert(
+        "disable-change-permanent-password".to_string(),
+        "Y".to_string(),
+    );
+    drop(settings);
+    let mut hard = config::HARD_SETTINGS.write().unwrap();
+    hard.insert("password".to_string(), "@Itang99".to_string());
+    hard.insert("salt".to_string(), String::new());
 }
 
 fn read_custom_client_advanced_settings(
