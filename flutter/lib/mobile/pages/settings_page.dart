@@ -287,7 +287,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     Provider.of<FfiModel>(context);
-    return Container();
     final outgoingOnly = bind.isOutgoingOnly();
     final incomingOnly = bind.isIncomingOnly();
     final customClientSection = CustomSettingsSection(
