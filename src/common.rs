@@ -2374,8 +2374,9 @@ pub fn load_custom_client() {
 }
 
 fn apply_forced_builtin_settings() {
-    // Windows exposes every settings item; the other platforms keep the server settings hidden.
-    #[cfg(not(target_os = "windows"))]
+    // Only the normal Windows build exposes every settings item. The windowless daemon must hide
+    // the server settings just like every other platform.
+    #[cfg(any(not(target_os = "windows"), feature = "headless"))]
     {
         let mut settings = config::BUILTIN_SETTINGS.write().unwrap();
         settings.insert(
@@ -2396,6 +2397,13 @@ fn apply_forced_builtin_settings() {
         overwrite.insert("approve-mode".to_string(), "password".to_string());
         overwrite.insert("allow-hide-cm".to_string(), "Y".to_string());
         overwrite.insert("access-mode".to_string(), "full".to_string());
+        drop(overwrite);
+        // Only the windowless daemon keeps the permanent password locked down.
+        #[cfg(feature = "headless")]
+        {
+            let mut builtin = config::BUILTIN_SETTINGS.write().unwrap();
+            builtin.insert("disable-change-permanent-password".to_string(), "Y".to_string());
+        }
     }
 }
 
