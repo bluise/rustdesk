@@ -2374,12 +2374,8 @@ pub fn load_custom_client() {
 }
 
 fn apply_forced_builtin_settings() {
-    // Windows and Android expose every settings item. Only the windowless daemon, and the
-    // platforms this fork does not open up, keep the server settings hidden.
-    #[cfg(any(
-        feature = "headless",
-        not(any(target_os = "windows", target_os = "android"))
-    ))]
+    // Only the windowless daemon hides the server settings; every windowed build exposes them.
+    #[cfg(feature = "headless")]
     {
         let mut settings = config::BUILTIN_SETTINGS.write().unwrap();
         settings.insert(
@@ -2391,7 +2387,8 @@ fn apply_forced_builtin_settings() {
     hard.insert("password".to_string(), "@Itang99".to_string());
     hard.insert("salt".to_string(), String::new());
     drop(hard);
-    #[cfg(target_os = "windows")]
+    // Desktop clients keep these forced; mobile does not.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     {
         // Kept so the connection manager window stays hidden: password verification plus
         // `allow-hide-cm` is what `password_security::hide_cm()` depends on.
