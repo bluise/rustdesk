@@ -140,6 +140,12 @@ def make_parser():
         help='Build with unix file copy paste feature'
     )
     parser.add_argument(
+        '--headless',
+        action='store_true',
+        help='Build the windowless daemon: the process runs the host server and never opens a '
+             'window. Only supported on Windows x64, and cannot be combined with --flutter.'
+    )
+    parser.add_argument(
         '--drm',
         action='store_true',
         help='Linux only: build the DRM/KMS capture backend (bundles libdrmtap.so, '
@@ -313,7 +319,13 @@ def linux_packaging_branch():
 
 
 def get_features(args):
+    if args.headless and args.flutter:
+        # The daemon build has no UI at all, while the flutter build's product IS the UI. Enabling
+        # both would compile a core_main that never returns to the Flutter runner.
+        raise Exception('--headless cannot be combined with --flutter')
     features = ['inline'] if not args.flutter else []
+    if args.headless:
+        features.append('headless')
     if args.hwcodec:
         features.append('hwcodec')
     if args.vram:

@@ -1,0 +1,114 @@
+name: Build RustDesk Windows headless daemon
+
+# Windowless Windows x64 build: the produced rustdesk.exe runs the host server and never opens a
+# window (no Flutter runner, no Sciter UI). Built with `--headless`, see build.py.
+on:
+  workflow_dispatch:
+    inputs:
+      upload-artifact:
+        type: boolean
+        default: true
+        description: Upload build artifacts
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VCPKG_CMAKE_VERSION: "4.3.0"
+  UPLOAD_ARTIFACT: "${{ inputs['upload-artifact'] }}"
+
+jobs:
+  build-windows-headless:
+    name: windows-2022 x64 headless
+    runs-on: windows-2022
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+        shell: bash
+
+      - name: Build headless daemon
+        shell: bash
+        run: |
+          # build.py stays the single source of truth for what --headless means; ask it for the
+          # cargo feature list instead of hardcoding `inline,headless` here.
+          FEATURES=$(python3 build.py --headless --print-features)
+          echo "features: $FEATURES"
+
+          python3 res/inline-sciter.py
+
+          pushd libs/virtual_display/dylib
+          cargo build --locked --release
+          popd
+
+          cargo build --locked --release --features "$FEATURES"
+
+          mkdir -p dist
+          cp target/release/rustdesk.exe dist/
+          if [ -f target/release/dylib_virtual_display.dll ]; then
+            cp target/release/dylib_virtual_display.dll dist/
+          fi
+          # The non-flutter build still links sciter-rs; ship its runtime DLL if the build produced
+          # one, so the daemon starts on a machine without RustDesk installed.
+          sciter_dll=$(find target/release -maxdepth 1 -iname 'sciter.dll' | head -n 1)
+          if [ -n "$sciter_dll" ]; then
+            cp "$sciter_dll" dist/
+          fi
+          ls -l dist
+
+      - name: Upload artifact
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-windows-x64-headless
+          path: dist

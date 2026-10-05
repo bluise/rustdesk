@@ -22,6 +22,8 @@ path = "src/service.rs"
 
 [features]
 inline = []
+# Windowless daemon build: never start a UI, run the host server in-process instead.
+headless = []
 use_samplerate = ["samplerate", "libsamplerate-sys"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]

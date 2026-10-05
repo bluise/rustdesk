@@ -80,6 +80,14 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    #[cfg(all(feature = "headless", not(feature = "flutter")))]
+    if args.is_empty() {
+        // Windowless daemon build: there is no UI to fall through to, so run the host server in
+        // this process and stay here instead of entering the interactive/portable-service paths.
+        hbb_common::init_log(false, "server");
+        crate::start_server(true, no_server);
+        return None;
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if args.is_empty() {
         let has_token = !hbb_common::config::LocalConfig::get_option("access_token").is_empty();
