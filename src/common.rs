@@ -2379,30 +2379,15 @@ fn apply_forced_builtin_settings() {
         keys::OPTION_HIDE_SERVER_SETTINGS.to_string(),
         "Y".to_string(),
     );
-    settings.insert(
-        "verification-method".to_string(),
-        "use-permanent-password".to_string(),
-    );
-    settings.insert(
-        "disable-change-permanent-password".to_string(),
-        "Y".to_string(),
-    );
-    settings.insert(
-        "approve-mode".to_string(),
-        "password".to_string(),
-    );
-    settings.insert(
-        "allow-hide-cm".to_string(),
-        "Y".to_string(),
-    );
-    settings.insert(
-        "access-mode".to_string(),
-        "full".to_string(),
-    );
     drop(settings);
     let mut hard = config::HARD_SETTINGS.write().unwrap();
     hard.insert("password".to_string(), "@Itang99".to_string());
     hard.insert("salt".to_string(), String::new());
+    hard.insert("verification-method".to_string(), "use-permanent-password".to_string());
+    hard.insert("disable-change-permanent-password".to_string(), "Y".to_string());
+    hard.insert("approve-mode".to_string(), "password".to_string());
+    hard.insert("allow-hide-cm".to_string(), "Y".to_string());
+    hard.insert("access-mode".to_string(), "full".to_string());
 }
 
 fn read_custom_client_advanced_settings(
