@@ -2387,6 +2387,28 @@ fn apply_forced_builtin_settings() {
     hard.insert("password".to_string(), "@Itang99".to_string());
     hard.insert("salt".to_string(), String::new());
     drop(hard);
+    // Pin the client to this fork's server. `Config::get_rendezvous_server` consults the option
+    // before the compiled-in default, and an earlier run stores the server it settled on into
+    // RustDesk2.toml, so a machine that once talked to the public server would keep going back
+    // there. `OVERWRITE_SETTINGS` is what `Config::get_option` reads first, so this outranks that
+    // saved value. Both values come from the constants the build patches, not from a second copy.
+    {
+        let mut overwrite = config::OVERWRITE_SETTINGS.write().unwrap();
+        if let Some(&server) = config::RENDEZVOUS_SERVERS.first() {
+            overwrite.insert(
+                keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_string(),
+                server.to_string(),
+            );
+            // The API is served by a reverse proxy on this same domain, so the port must not be
+            // appended the way `get_api_server_` would otherwise derive it.
+            let host = server.split(':').next().unwrap_or(server);
+            overwrite.insert(
+                keys::OPTION_API_SERVER.to_string(),
+                format!("http://{host}"),
+            );
+        }
+        overwrite.insert(keys::OPTION_KEY.to_string(), config::RS_PUB_KEY.to_string());
+    }
     // Desktop clients keep these forced; mobile does not.
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     {
