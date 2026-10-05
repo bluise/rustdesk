@@ -2404,7 +2404,7 @@ fn apply_forced_builtin_settings() {
             let host = server.split(':').next().unwrap_or(server);
             overwrite.insert(
                 keys::OPTION_API_SERVER.to_string(),
-                format!("http://{host}"),
+                format!("https://{host}"),
             );
         }
         overwrite.insert(keys::OPTION_KEY.to_string(), config::RS_PUB_KEY.to_string());
