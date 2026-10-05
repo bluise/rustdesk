@@ -19,6 +19,7 @@ env:
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_CMAKE_VERSION: "4.3.0"
+  VERSION: "1.5.0"
   UPLOAD_ARTIFACT: "${{ inputs['upload-artifact'] }}"
 
 jobs:
@@ -105,10 +106,14 @@ jobs:
             cp "$sciter_dll" dist/
           fi
           ls -l dist
+          # Distinct publish name: the executable inside keeps the name `rustdesk.exe`, so without
+          # this the windowless and windowed builds would overwrite each other when published.
+          python3 -c "import shutil; shutil.make_archive('rustdesk-${{ env.VERSION }}-windows-x64-headless', 'zip', 'dist')"
+          ls -l rustdesk-${{ env.VERSION }}-windows-x64-headless.zip
 
       - name: Upload artifact
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rustdesk-windows-x64-headless
-          path: dist
+          path: rustdesk-${{ env.VERSION }}-windows-x64-headless.zip
