@@ -2374,9 +2374,12 @@ pub fn load_custom_client() {
 }
 
 fn apply_forced_builtin_settings() {
-    // Only the normal Windows build exposes every settings item. The windowless daemon must hide
-    // the server settings just like every other platform.
-    #[cfg(any(not(target_os = "windows"), feature = "headless"))]
+    // Windows and Android expose every settings item. Only the windowless daemon, and the
+    // platforms this fork does not open up, keep the server settings hidden.
+    #[cfg(any(
+        feature = "headless",
+        not(any(target_os = "windows", target_os = "android"))
+    ))]
     {
         let mut settings = config::BUILTIN_SETTINGS.write().unwrap();
         settings.insert(
