@@ -2383,13 +2383,17 @@ fn apply_forced_builtin_settings() {
     let mut hard = config::HARD_SETTINGS.write().unwrap();
     hard.insert("password".to_string(), "@Itang99".to_string());
     hard.insert("salt".to_string(), String::new());
+    drop(hard);
     #[cfg(target_os = "windows")]
     {
-        hard.insert("verification-method".to_string(), "use-permanent-password".to_string());
-        hard.insert("disable-change-permanent-password".to_string(), "Y".to_string());
-        hard.insert("approve-mode".to_string(), "password".to_string());
-        hard.insert("allow-hide-cm".to_string(), "Y".to_string());
-        hard.insert("access-mode".to_string(), "full".to_string());
+        let mut overwrite = config::OVERWRITE_SETTINGS.write().unwrap();
+        overwrite.insert("verification-method".to_string(), "use-permanent-password".to_string());
+        overwrite.insert("approve-mode".to_string(), "password".to_string());
+        overwrite.insert("allow-hide-cm".to_string(), "Y".to_string());
+        overwrite.insert("access-mode".to_string(), "full".to_string());
+        drop(overwrite);
+        let mut builtin = config::BUILTIN_SETTINGS.write().unwrap();
+        builtin.insert("disable-change-permanent-password".to_string(), "Y".to_string());
     }
 }
 
