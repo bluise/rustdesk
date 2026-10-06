@@ -1,79 +1,98 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableExtensions
 
 rem ===========================================================================
-rem  用法：把本文件与 rustdesk.exe（无窗口版）放在【同一个目录】
-rem        然后双击运行 —— 会自动请求管理员权限
-rem  作用：用同目录的 rustdesk.exe 安装开机自启的 Windows 服务
-rem  服务名 / 显示名与客户端自带 --install-service 一致，便于识别和替换
-rem  可重复运行：会先停止并删除旧服务，再按当前目录重建
+rem  Put this file NEXT TO rustdesk.exe (windowless build), then run it.
+rem  It registers that very rustdesk.exe as an auto-starting Windows service.
+rem  Everything it does is also written to install-service.log next to itself.
 rem ===========================================================================
 
 set "SERVICE_NAME=RustDesk"
 set "DISPLAY_NAME=RustDesk Service"
 set "EXE=%~dp0rustdesk.exe"
+set "LOG=%~dp0install-service.log"
 
-rem ---------- 1) 管理员权限：没有就提权重来 ----------
-net session >nul 2>&1
+echo === install-service === >"%LOG%"
+echo script: %~f0 >>"%LOG%"
+
+rem ---------- 1) administrator check ----------
+fltmc >nul 2>&1 || net session >nul 2>&1
 if errorlevel 1 (
-    echo [*] 需要管理员权限，正在请求提权...
+    echo [*] Not elevated. Asking for administrator rights...
+    echo not-elevated >>"%LOG%"
     powershell -NoProfile -Command "Start-Process -Verb RunAs -FilePath '%~f0'"
+    echo.
+    echo [!] A second window should open with UAC. If you clicked "No", or nothing
+    echo     appeared, right-click this file and choose "Run as administrator".
+    echo.
+    pause
     exit /b
 )
+echo elevated >>"%LOG%"
+echo [*] Running as administrator.
 
-rem ---------- 2) 确认同目录下有 rustdesk.exe ----------
+rem ---------- 2) the exe must sit next to this script ----------
 if not exist "%EXE%" (
-    echo [x] 同目录下找不到 rustdesk.exe：
+    echo [x] rustdesk.exe not found next to this script:
     echo     %EXE%
-    echo     请把本批处理复制到 rustdesk.exe 所在目录后再运行。
+    echo exe-missing >>"%LOG%"
     echo.
     pause
     exit /b 1
 )
-echo [*] 使用可执行文件：%EXE%
+echo [*] exe      : %EXE%
+echo [*] service  : %SERVICE_NAME%
+echo exe=%EXE% >>"%LOG%"
 
-rem ---------- 3) 已有同名服务则先停掉再删除，确保指向当前目录 ----------
+rem ---------- 3) drop a service with the same name, so the path follows ----------
 sc query "%SERVICE_NAME%" >nul 2>&1
 if not errorlevel 1 (
-    echo [*] 检测到已存在的服务 %SERVICE_NAME%，先停止并删除...
-    sc stop "%SERVICE_NAME%" >nul 2>&1
+    echo [*] Existing service found, stopping and deleting it first...
+    sc stop "%SERVICE_NAME%" >>"%LOG%" 2>&1
     ping -n 4 127.0.0.1 >nul
-    sc delete "%SERVICE_NAME%" >nul 2>&1
+    sc delete "%SERVICE_NAME%" >>"%LOG%" 2>&1
     ping -n 4 127.0.0.1 >nul
 )
 
-rem ---------- 4) 结束可能在跑的旧进程，避免文件占用和双实例 ----------
-taskkill /F /IM rustdesk.exe >nul 2>&1
+rem ---------- 4) stop running instances ----------
+taskkill /F /IM rustdesk.exe >>"%LOG%" 2>&1
 
-rem ---------- 5) 创建服务 ----------
-rem  binPath 指向同目录的 exe，并带 --service 进入常驻服务模式
-rem  注意 sc 的语法：等号后面必须有一个空格
-sc create "%SERVICE_NAME%" binPath= "\"%EXE%\" --service" start= auto DisplayName= "%DISPLAY_NAME%" >nul
-if errorlevel 1 (
-    echo [x] sc create 失败，错误码 %errorlevel%
-    echo     常见原因：未以管理员身份运行、或磁盘/杀软拦截。
+rem ---------- 5) create the service (output is shown AND logged) ----------
+echo.
+echo [*] sc create "%SERVICE_NAME%" binPath= "\"%EXE%\" --service" start= auto
+sc create "%SERVICE_NAME%" binPath= "\"%EXE%\" --service" start= auto DisplayName= "%DISPLAY_NAME%" >"%LOG%.tmp" 2>&1
+set "RC=%errorlevel%"
+type "%LOG%.tmp"
+type "%LOG%.tmp" >>"%LOG%"
+del "%LOG%.tmp" >nul 2>&1
+echo sc-create-exit-code=%RC% >>"%LOG%"
+
+if not "%RC%"=="0" (
+    echo.
+    echo [x] Service creation failed with exit code %RC%
+    echo     Paste the line above into an elevated cmd.exe to see the raw error,
+    echo     or send me this log file:  %LOG%
     echo.
     pause
     exit /b 1
 )
 
-rem ---------- 6) 启动并校验 ----------
-sc start "%SERVICE_NAME%" >nul
+rem ---------- 6) start and verify ----------
+sc start "%SERVICE_NAME%" >>"%LOG%" 2>&1
 ping -n 4 127.0.0.1 >nul
 
 echo.
-echo ================== 安装结果 ==================
+echo ================== result ==================
 sc query "%SERVICE_NAME%"
-echo.
+sc query "%SERVICE_NAME%" >>"%LOG%" 2>&1
 sc qc "%SERVICE_NAME%" | findstr /I "BINARY_PATH_NAME START_TYPE"
+sc qc "%SERVICE_NAME%" | findstr /I "BINARY_PATH_NAME START_TYPE" >>"%LOG%" 2>&1
 echo.
-echo [OK] 服务已安装并设为开机自启（START_TYPE 应为 AUTO_START）。
-echo      服务名：%SERVICE_NAME%
-echo      卸载命令：sc stop %SERVICE_NAME% ^&^& sc delete %SERVICE_NAME%
-echo      换目录/换 exe 后，重新运行本批处理即可。
+echo [OK] Installed and set to auto start (START_TYPE should say AUTO_START).
+echo      Log file : %LOG%
+echo      Uninstall: sc stop %SERVICE_NAME% ^&^& sc delete %SERVICE_NAME%
 echo.
-echo      提醒：dylib_virtual_display.dll 等伴随文件要和 exe 放在同一目录。
+echo      Keep dylib_virtual_display.dll in the same folder as the exe.
 echo.
 pause
 endlocal
