@@ -135,6 +135,10 @@ jobs:
           mkdir -p dist
           cp target/release/rustdesk dist/
           test -f target/release/libsciter-gtk.so && cp target/release/libsciter-gtk.so dist/ || true
+          # Ship the installer helper so the archive is self-contained: it registers this daemon in
+          # place as a systemd service that starts at boot, using the directory it is unpacked into.
+          cp .github/scripts/install-service-linux.sh dist/install-service.sh
+          chmod +x dist/install-service.sh
           ls -l dist
           # Distinct publish name: the executable inside keeps the name `rustdesk`, so without this
           # the windowless and windowed builds would overwrite each other when published.
