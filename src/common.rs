@@ -2417,22 +2417,19 @@ fn apply_forced_builtin_settings() {
             format!("https://{host}"),
         );
         overwrite.insert(keys::OPTION_KEY.to_string(), PRESET_KEY.to_string());
-        // Reach the server over WebSocket. Because the server is configured by name rather than by
-        // IP, `check_ws` turns these into `wss://<domain>/ws/id` and `wss://<domain>/ws/relay`, so
-        // the ports 21118/21119 are only what the reverse proxy forwards those two paths to.
-        overwrite.insert(
-            keys::OPTION_ALLOW_WEBSOCKET.to_string(),
-            "Y".to_string(),
-        );
+        // `allow-websocket` is deliberately left alone rather than forced on. Enabling WebSocket
+        // sets `force_relay` on that side, and the peer then relays as well, so it disables both
+        // the classic punches and the LAN direct connection on either device. Keeping it unset
+        // leaves the option at its default of off, so direct connections work, and a device that
+        // really sits behind a network which only lets 443 out can still turn it on for itself.
     }
     // `enable-webrtc`, `enable-udp-punch` and `enable-ipv6-punch` are local options, so they need the
     // local overwrite map rather than the one above, and on a self-hosted server they all default to
     // off: `get_local_option` answers "N" for them whenever the rendezvous server is not under
-    // `rustdesk.com`. Pin all three so no device can silently drop a direct transport. Only ICE can
-    // actually go direct while WebSocket is on - the classic punching routes are gated behind
-    // `!force_relay` - but the two punch switches stay ready for a deployment that turns WebSocket
-    // off again. The peer answers the offer without any of these flags, yet setting them everywhere
-    // keeps every device behaving the same way.
+    // `rustdesk.com`. Pin all three so no device can silently drop a direct transport. A device that
+    // enables WebSocket for itself relays the classic routes, which are gated behind `!force_relay`,
+    // which leaves ICE as its only direct path. The peer answers the offer without any of these
+    // flags, yet setting them everywhere keeps every device behaving the same way.
     {
         let mut overwrite = config::OVERWRITE_LOCAL_SETTINGS.write().unwrap();
         overwrite.insert(keys::OPTION_ENABLE_WEBRTC.to_string(), "Y".to_string());
