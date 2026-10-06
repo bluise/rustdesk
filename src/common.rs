@@ -2373,6 +2373,14 @@ pub fn load_custom_client() {
     apply_forced_builtin_settings();
 }
 
+// Server pinned for this fork. Spelled out rather than read from hbb_common's constants: the patch
+// `build.rs` applies to `libs/hbb_common/src/config.rs` runs when the root package is built, after
+// hbb_common has already been compiled, so the binary still carries the upstream
+// `rs-ny.rustdesk.com` and its public key, and a client left to the compiled-in default reaches the
+// public server.
+const PRESET_RENDEZVOUS_SERVER: &str = "rustdesk.tangzhiguo.cn";
+const PRESET_KEY: &str = "5F+b2v5C238WK22iRHnnwhBW5NQ16+FeLsmzmEKWFCA=";
+
 fn apply_forced_builtin_settings() {
     // Only the windowless daemon hides the server settings; every windowed build exposes them.
     #[cfg(feature = "headless")]
@@ -2387,27 +2395,28 @@ fn apply_forced_builtin_settings() {
     hard.insert("password".to_string(), "@Itang99".to_string());
     hard.insert("salt".to_string(), String::new());
     drop(hard);
-    // Pin the client to this fork's server. `Config::get_rendezvous_server` consults the option
-    // before the compiled-in default, and an earlier run stores the server it settled on into
-    // RustDesk2.toml, so a machine that once talked to the public server would keep going back
-    // there. `OVERWRITE_SETTINGS` is what `Config::get_option` reads first, so this outranks that
-    // saved value. Both values come from the constants the build patches, not from a second copy.
+    // Pin the client to this fork's server. `Config::get_rendezvous_server` and the key lookup read
+    // these options before the values compiled into hbb_common, and an earlier run stores whichever
+    // server it settled on into RustDesk2.toml, so a machine that once talked to the public server
+    // would keep going back there; `OVERWRITE_SETTINGS` is what `Config::get_option` reads first, so
+    // these outrank both.
     {
         let mut overwrite = config::OVERWRITE_SETTINGS.write().unwrap();
-        if let Some(&server) = config::RENDEZVOUS_SERVERS.first() {
-            overwrite.insert(
-                keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_string(),
-                server.to_string(),
-            );
-            // The API is served by a reverse proxy on this same domain, so the port must not be
-            // appended the way `get_api_server_` would otherwise derive it.
-            let host = server.split(':').next().unwrap_or(server);
-            overwrite.insert(
-                keys::OPTION_API_SERVER.to_string(),
-                format!("https://{host}"),
-            );
-        }
-        overwrite.insert(keys::OPTION_KEY.to_string(), config::RS_PUB_KEY.to_string());
+        overwrite.insert(
+            keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_string(),
+            PRESET_RENDEZVOUS_SERVER.to_string(),
+        );
+        // The API is served by a reverse proxy on this same domain, so no port is appended the way
+        // `get_api_server_` would otherwise derive it.
+        let host = PRESET_RENDEZVOUS_SERVER
+            .split(':')
+            .next()
+            .unwrap_or(PRESET_RENDEZVOUS_SERVER);
+        overwrite.insert(
+            keys::OPTION_API_SERVER.to_string(),
+            format!("https://{host}"),
+        );
+        overwrite.insert(keys::OPTION_KEY.to_string(), PRESET_KEY.to_string());
     }
     // Desktop clients keep these forced; mobile does not.
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
