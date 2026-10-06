@@ -2417,6 +2417,13 @@ fn apply_forced_builtin_settings() {
             format!("https://{host}"),
         );
         overwrite.insert(keys::OPTION_KEY.to_string(), PRESET_KEY.to_string());
+        // Reach the server over WebSocket. Because the server is configured by name rather than by
+        // IP, `check_ws` turns these into `wss://<domain>/ws/id` and `wss://<domain>/ws/relay`, so
+        // the ports 21118/21119 are only what the reverse proxy forwards those two paths to.
+        overwrite.insert(
+            keys::OPTION_ALLOW_WEBSOCKET.to_string(),
+            "Y".to_string(),
+        );
     }
     // Desktop clients keep these forced; mobile does not.
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
