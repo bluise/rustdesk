@@ -2425,6 +2425,16 @@ fn apply_forced_builtin_settings() {
             "Y".to_string(),
         );
     }
+    // `enable-webrtc` is a local option, so it needs the local overwrite map rather than the one
+    // above, and on a self-hosted server it defaults to off: `get_local_option` answers "N" for it
+    // whenever the rendezvous server is not under `rustdesk.com`. Under WebSocket, ICE is the only
+    // path that can still connect directly - the classic punching routes are all gated behind
+    // `!force_relay` - so turn it on. The peer answers the offer without this flag, but setting it
+    // everywhere keeps every device behaving the same way.
+    {
+        let mut overwrite = config::OVERWRITE_LOCAL_SETTINGS.write().unwrap();
+        overwrite.insert(keys::OPTION_ENABLE_WEBRTC.to_string(), "Y".to_string());
+    }
     // Desktop clients keep these forced; mobile does not.
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     {
