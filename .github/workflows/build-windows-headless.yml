@@ -106,6 +106,9 @@ jobs:
           if [ -n "$sciter_dll" ]; then
             cp "$sciter_dll" dist/
           fi
+          # Ship the installer helper so the archive is self-contained: it registers this daemon in
+          # place as an auto-starting Windows service, using the directory it is unpacked into.
+          cp .github/scripts/install-service.bat dist/
           ls -l dist
           # Distinct publish name: the executable inside keeps the name `rustdesk.exe`, so without
           # this the windowless and windowed builds would overwrite each other when published.
