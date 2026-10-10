@@ -1,0 +1,27 @@
+[package]
+name = "hvnc-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Standalone Windows probe for the hidden-desktop mechanism (RustDesk shadow-desktop, scheme C1)"
+
+# Kept out of the repository workspace on purpose (see the root Cargo.toml).
+# It only builds on Windows, and it must not slow down the real builds.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "winuser",
+    "wingdi",
+    "processthreadsapi",
+    "handleapi",
+    "errhandlingapi",
+    "winbase",
+    "winnt",
+    "basetsd",
+    "minwindef",
+    "ntdef",
+    "windef",
+] }
+
+[[bin]]
+name = "hvnc-probe"
+path = "src/main.rs"

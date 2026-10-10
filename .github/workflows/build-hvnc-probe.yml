@@ -11,7 +11,7 @@ on:
     inputs:
       ref:
         type: string
-        default: shadow
+        default: master
         description: Branch that holds tools/hvnc-probe
       upload-artifact:
         type: boolean
