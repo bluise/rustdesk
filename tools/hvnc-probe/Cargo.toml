@@ -29,3 +29,10 @@ path = "src/main.rs"
 # Standalone workspace root on purpose: without this, cargo walks up to the repository
 # manifest and tries to load every RustDesk member just to build a Windows-only probe.
 [workspace]
+
+# This probe doubles as the local compile check for the crate's shadow-desktop module
+# (see src/main.rs), so the include is on by default; pass --no-default-features to prove
+# the module really stays out of the build when the feature is off.
+[features]
+default = ["shadow-desktop"]
+shadow-desktop = []

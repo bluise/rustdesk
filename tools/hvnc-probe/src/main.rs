@@ -24,6 +24,15 @@ mod util;
 #[cfg(windows)]
 mod windows;
 
+// The real crate's module, compiled here from its own source through `#[path]`: the gating
+// below is a copy of the line in src/lib.rs, so `cargo check` in this directory is a
+// compile check for the product code, and `--no-default-features` shows that the module
+// stays out of the build entirely when the feature is off.
+#[cfg(all(windows, feature = "shadow-desktop"))]
+#[allow(dead_code)]
+#[path = "../../../src/shadow_desktop/mod.rs"]
+mod shadow_desktop;
+
 #[cfg(windows)]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
