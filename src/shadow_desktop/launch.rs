@@ -12,7 +12,7 @@ use winapi::um::handleapi::CloseHandle;
 use winapi::um::processthreadsapi::{CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW};
 use winapi::um::winbase::CREATE_NEW_CONSOLE;
 
-use super::wide;
+use super::{last_error, wide};
 
 /// Starts `program` on `qualified_desktop` (`WinSta0\RustDeskShadow`), returning its pid.
 pub fn spawn_on_desktop(
@@ -43,9 +43,9 @@ pub fn spawn_on_desktop(
             &mut pi,
         );
         if ok == FALSE {
-            let code = winapi::um::errhandlingapi::GetLastError();
             return Err(format!(
-                "CreateProcessW({program}) on {qualified_desktop} failed: error {code} (0x{code:08X})"
+                "CreateProcessW({program}) on {qualified_desktop} failed: {}",
+                last_error()
             ));
         }
         CloseHandle(pi.hThread);

@@ -1,9 +1,9 @@
 //! List the windows that live on a hidden desktop.
 //!
-//! Scheme C1 needs this before it can steer anything: input focus has to be set
-//! on a window that really exists on that desktop, and titles are the only way to
-//! tell which window that is. It is also the cheapest way to answer "is anything
-//! actually running over there?" while bringing the mechanism up.
+//! Needed before anything can be steered: input focus has to be set on a window that
+//! really exists on that desktop, and titles are the only way to tell which one. It is
+//! also the cheapest way to answer "is anything actually running over there?" while
+//! bringing the mechanism up.
 
 use std::thread;
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, MAX_PATH, TRUE};
@@ -12,8 +12,8 @@ use winapi::um::winuser::{
     EnumDesktopWindows, GetClassNameW, GetWindowRect, GetWindowTextW, IsWindowVisible,
 };
 
-use crate::desktop::AttachedDesktop;
-use crate::util::last_error;
+use super::desktop::AttachedDesktop;
+use super::last_error;
 
 #[derive(Debug)]
 pub struct WindowInfo {

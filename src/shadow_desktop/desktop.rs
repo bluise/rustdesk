@@ -15,7 +15,7 @@ use winapi::um::winuser::{
     SetThreadDesktop, UOI_NAME,
 };
 
-use super::wide;
+use super::{last_error, wide};
 
 /// MSDN `DESKTOP_ALL_ACCESS`; spelled out instead of relying on which winapi module
 /// re-exports it.
@@ -25,11 +25,6 @@ pub const WINSTA_ALL_ACCESS: DWORD = 0x0000_037F;
 /// `WinSta0` is the interactive window station: the only one attached to the display,
 /// the keyboard and the mouse.
 pub const INTERACTIVE_WINSTA: &str = "WinSta0";
-
-fn last_error() -> String {
-    let code = unsafe { winapi::um::errhandlingapi::GetLastError() };
-    format!("error {code} (0x{code:08X})")
-}
 
 /// An open handle to a desktop. Closing it is what removes the desktop, so this is
 /// deliberately not `Clone`.

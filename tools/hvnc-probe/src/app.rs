@@ -5,7 +5,8 @@
 use std::io::Write;
 use std::time::Duration;
 
-use crate::{bmp, capture, desktop, input, launch, windows};
+use crate::bmp;
+use crate::shadow_desktop::{capture, desktop, input, launch, windows, SHADOW_DESKTOP};
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let (command, rest) = match args.split_first() {
@@ -137,7 +138,7 @@ fn key_cmd(rest: &[String]) -> Result<(), String> {
 fn demo(rest: &[String]) -> Result<(), String> {
     let program = rest.first().map(|s| s.as_str()).unwrap_or("notepad.exe");
     let args = if rest.is_empty() { &rest[0..0] } else { &rest[1..] };
-    let name = "RustDeskShadow";
+    let name = SHADOW_DESKTOP;
     let desktop = desktop::Desktop::create_or_open(name)?;
     println!("desktop ready: {}", desktop.qualified_name());
     let pid = launch::spawn_on_desktop(&desktop.qualified_name(), program, args)?;

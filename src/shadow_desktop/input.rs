@@ -1,12 +1,12 @@
 //! SendInput into a desktop that is not the input desktop.
 //!
-//! Windows routes injected input to the desktop the calling thread is attached
-//! to, so - exactly like capture - this runs on a thread of its own that has
-//! been switched with SetThreadDesktop and owns no windows.
+//! Windows routes injected input to the desktop the calling thread is attached to, so -
+//! exactly like capture - this runs on a thread of its own that has been switched with
+//! `SetThreadDesktop` and owns no windows.
 //!
-//! MSDN notes that SendInput is subject to UIPI: input only reaches windows of
-//! an equal or lower integrity level, and a blocked call reports neither an
-//! error code nor a shorter-than-expected return. Every call is checked.
+//! MSDN notes that SendInput is subject to UIPI: input only reaches windows of an equal
+//! or lower integrity level, and a blocked call reports neither an error code nor a
+//! shorter-than-expected return. Every call is checked.
 
 use std::mem::{size_of, zeroed};
 use std::thread;
@@ -18,10 +18,10 @@ use winapi::um::winuser::{
     MOUSEEVENTF_MOVE, MOUSEINPUT, SM_CXSCREEN, SM_CYSCREEN,
 };
 
-use crate::desktop::AttachedDesktop;
+use super::desktop::AttachedDesktop;
 
-/// Marks our own events, the way enigo tags its input: the peer-side hook can
-/// then tell injected input from a real user, which is what privacy mode does.
+/// Marks our own events, the way enigo tags its input: the peer-side hook can then tell
+/// injected input from a real user, which is what privacy mode does.
 const INPUT_TAG: usize = 0x5244_534B; // "RDSK"
 
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +43,8 @@ pub fn send(desktop: &str, actions: &[Action]) -> Result<(), String> {
 
 fn send_on_thread(desktop: &str, actions: &[Action]) -> Result<(), String> {
     let _attached = AttachedDesktop::attach(desktop)?;
-    let (screen_w, screen_h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    let (screen_w, screen_h) =
+        unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
     for action in actions {
         match *action {
             Action::MouseMove { x, y } => {
@@ -100,8 +101,8 @@ fn send_key(vk: u16, up: bool) -> Result<(), String> {
             let mut u: INPUT_u = zeroed();
             *u.ki_mut() = KEYBDINPUT {
                 wVk: vk,
-                // Scan-code injection would be needed for DirectInput games;
-                // virtual keys are enough for ordinary windows.
+                // Scan-code injection would be needed for DirectInput games; virtual keys
+                // are enough for ordinary windows.
                 wScan: 0,
                 dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
                 time: 0,

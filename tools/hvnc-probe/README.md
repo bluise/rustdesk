@@ -1,11 +1,17 @@
 # hvnc-probe
 
 Standalone Windows probe for the **hidden-desktop** mechanism behind the
-shadow-desktop mode (scheme C1). It exists so the three primitives can be proven
-on a real machine *before* any of them is wired into RustDesk.
+shadow-desktop mode (scheme C1). It exists so the mechanism can be proven on a real
+machine and compile-checked locally *before* any of it is wired into the host.
 
-Not part of the workspace (`Cargo.toml` excludes it) and not built by CI: it is
-Windows-only and must never slow down a real build.
+It holds no mechanism of its own: every primitive is `src/shadow_desktop/` in the
+crate, compiled from its own source through `#[path]`. A run of this probe therefore
+exercises the product code, and `cargo check` in this directory is a local compile
+check for that module.
+
+Not part of the workspace (`Cargo.toml` excludes it, and the probe is its own
+workspace root) and not built by CI: it is Windows-only and must never slow down a
+real build.
 
 ## What it proves
 

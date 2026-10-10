@@ -1,9 +1,9 @@
 //! GDI capture of a desktop that is not on screen.
 //!
-//! `GetDC(NULL)` resolves to the desktop that the calling *thread* is attached
-//! to, so a hidden desktop can only be read from a thread that has been switched
-//! there with SetThreadDesktop. Such a thread must own no windows and no hooks,
-//! which is why every capture run gets a thread of its own.
+//! `GetDC(NULL)` resolves to the desktop that the calling *thread* is attached to, so
+//! the shadow desktop can only be read from a thread switched there with
+//! `SetThreadDesktop`. Such a thread must own no windows and no hooks, which is why every
+//! capture run gets a thread of its own.
 
 use std::mem::{size_of, zeroed};
 use std::ptr;
@@ -17,8 +17,8 @@ use winapi::um::wingdi::{
 };
 use winapi::um::winuser::{GetDC, GetSystemMetrics, ReleaseDC, SM_CXSCREEN, SM_CYSCREEN};
 
-use crate::desktop::AttachedDesktop;
-use crate::util::last_error;
+use super::desktop::AttachedDesktop;
+use super::last_error;
 
 /// One frame, top-down BGRA - the same layout `scrap` hands to the encoder.
 pub struct Frame {
@@ -29,8 +29,8 @@ pub struct Frame {
 
 /// Grabs `count` frames of `desktop`, `interval` apart, from one attached thread.
 ///
-/// `size` defaults to the session's primary resolution; pass it when the desktop
-/// has been resized behind your back and you want to override what Win32 reports.
+/// `size` defaults to the session's primary resolution; pass it to override what Win32
+/// reports for that desktop.
 pub fn capture_frames(
     desktop: &str,
     count: usize,
@@ -82,7 +82,8 @@ fn capture_on_thread(
         let mut frames = Vec::with_capacity(count);
         for i in 0..count {
             if FALSE == BitBlt(mem_dc, 0, 0, width, height, screen_dc, 0, 0, SRCCOPY | CAPTUREBLT) {
-                eprintln!("[capture] BitBlt failed: {}", last_error());
+                // Not fatal: a hidden desktop can sit unchanged between frames.
+                eprintln!("[shadow_desktop] BitBlt failed: {}", last_error());
             }
             frames.push(read_frame(mem_dc, bmp, width, height)?);
             if i + 1 < count {
