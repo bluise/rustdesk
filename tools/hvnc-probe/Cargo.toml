@@ -25,3 +25,7 @@ winapi = { version = "0.3", features = [
 [[bin]]
 name = "hvnc-probe"
 path = "src/main.rs"
+
+# Standalone workspace root on purpose: without this, cargo walks up to the repository
+# manifest and tries to load every RustDesk member just to build a Windows-only probe.
+[workspace]

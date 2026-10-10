@@ -72,4 +72,7 @@ pub mod privacy_mode;
 #[cfg(windows)]
 pub mod virtual_display_manager;
 
+#[cfg(all(windows, feature = "shadow-desktop"))]
+pub mod shadow_desktop;
+
 mod kcp_stream;

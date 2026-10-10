@@ -24,6 +24,10 @@ path = "src/service.rs"
 inline = []
 # Windowless daemon build: never start a UI, run the host server in-process instead.
 headless = []
+# Hidden-desktop mode: the peer drives a desktop of its own that never appears on the
+# machine's screen (scheme C1). Off by default, and every existing capture/input/launch
+# path stays untouched while it is off, so this is purely additive.
+shadow-desktop = []
 use_samplerate = ["samplerate", "libsamplerate-sys"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]
