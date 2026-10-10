@@ -146,6 +146,13 @@ def make_parser():
              'window. Only supported on Windows x64, and cannot be combined with --flutter.'
     )
     parser.add_argument(
+        '--shadow-desktop',
+        action='store_true',
+        help='Windows only: add the hidden-desktop mode, where the peer is driven on a desktop of '
+             'its own that never appears on the machine\'s screen. Needs the host to run inside the '
+             "user's session; the extra code is inert without this flag."
+    )
+    parser.add_argument(
         '--drm',
         action='store_true',
         help='Linux only: build the DRM/KMS capture backend (bundles libdrmtap.so, '
@@ -326,6 +333,8 @@ def get_features(args):
     features = ['inline'] if not args.flutter else []
     if args.headless:
         features.append('headless')
+    if args.shadow_desktop:
+        features.append('shadow-desktop')
     if args.hwcodec:
         features.append('hwcodec')
     if args.vram:

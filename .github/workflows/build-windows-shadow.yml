@@ -1,0 +1,135 @@
+name: Build RustDesk Windows shadow desktop
+
+# Windows x64 hidden-desktop variant: the windowless daemon plus the `shadow-desktop`
+# feature, so the peer can be driven on a desktop of its own that never appears on the
+# machine's screen (scheme C1). Purely an addition - the headless and windowed builds are
+# untouched and keep publishing under their own names.
+on:
+  workflow_dispatch:
+    inputs:
+      upload-artifact:
+        type: boolean
+        default: true
+        description: Upload build artifacts
+
+permissions:
+  contents: write
+
+env:
+  RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VCPKG_CMAKE_VERSION: "4.3.0"
+  VERSION: "1.5.0"
+  TAG_NAME: "custom-v1.5.0"
+  UPLOAD_ARTIFACT: "${{ inputs['upload-artifact'] }}"
+
+jobs:
+  build-windows-shadow:
+    name: windows-2022 x64 shadow desktop
+    runs-on: windows-2022
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+        shell: bash
+
+      - name: Build shadow desktop daemon
+        shell: bash
+        run: |
+          # build.py stays the single source of truth for what the flags mean; ask it for the
+          # cargo feature list instead of hardcoding `inline,headless,shadow-desktop` here.
+          FEATURES=$(python3 build.py --headless --shadow-desktop --print-features)
+          echo "features: $FEATURES"
+
+          python3 res/inline-sciter.py
+
+          pushd libs/virtual_display/dylib
+          cargo build --locked --release
+          popd
+
+          cargo build --locked --release --features "$FEATURES"
+
+          mkdir -p dist
+          cp target/release/rustdesk.exe dist/
+          if [ -f target/release/dylib_virtual_display.dll ]; then
+            cp target/release/dylib_virtual_display.dll dist/
+          fi
+          # The non-flutter build still links sciter-rs; ship its runtime DLL if the build produced
+          # one, so the daemon starts on a machine without RustDesk installed.
+          sciter_dll=$(find target/release -maxdepth 1 -iname 'sciter.dll' | head -n 1)
+          if [ -n "$sciter_dll" ]; then
+            cp "$sciter_dll" dist/
+          fi
+          # Ship the installer helper so the archive is self-contained: it registers this daemon in
+          # place as an auto-starting Windows service, using the directory it is unpacked into.
+          cp .github/scripts/install-service.bat dist/
+          ls -l dist
+          # Distinct publish name: the exe inside keeps the name `rustdesk.exe`, so without this the
+          # shadow variant would overwrite the headless and windowed archives.
+          python3 -c "import shutil; shutil.make_archive('rustdesk-${{ env.VERSION }}-windows-x64-shadow', 'zip', 'dist')"
+          ls -l rustdesk-${{ env.VERSION }}-windows-x64-shadow.zip
+
+      - name: Upload artifact
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-windows-x64-shadow
+          path: rustdesk-${{ env.VERSION }}-windows-x64-shadow.zip
+
+      - name: Publish release
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        continue-on-error: true
+        with:
+          prerelease: false
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            rustdesk-${{ env.VERSION }}-windows-x64-shadow.zip
