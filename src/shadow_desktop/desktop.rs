@@ -114,24 +114,32 @@ pub struct AttachedDesktop {
 impl AttachedDesktop {
     pub fn attach(desktop: &str) -> Result<Self, String> {
         ensure_process_in_interactive_winsta()?;
-        let qualified = qualified(desktop);
-        unsafe {
-            let handle = OpenDesktopW(wide(&qualified).as_ptr(), 0, FALSE, DESKTOP_ALL_ACCESS);
-            if handle.is_null() {
-                return Err(format!("OpenDesktopW({qualified}) failed: {}", last_error()));
+        // The bare name is what works here: the process now sits inside WinSta0, so the
+        // desktop resolves there. The fully qualified "WinSta0\name" form that
+        // STARTUPINFOW wants is rejected by OpenDesktopW with ERROR_BAD_PATHNAME (161),
+        // so it stays a fallback only.
+        let mut last = String::new();
+        for candidate in [bare(desktop), desktop.to_owned()] {
+            unsafe {
+                let handle = OpenDesktopW(wide(&candidate).as_ptr(), 0, FALSE, DESKTOP_ALL_ACCESS);
+                if handle.is_null() {
+                    last = format!("OpenDesktopW({candidate}) failed: {}", last_error());
+                    continue;
+                }
+                if FALSE == SetThreadDesktop(handle) {
+                    let e = last_error();
+                    CloseDesktop(handle);
+                    return Err(format!(
+                        "SetThreadDesktop({candidate}) failed: {e} (does this thread already own a window?)"
+                    ));
+                }
+                return Ok(AttachedDesktop {
+                    handle,
+                    name: candidate,
+                });
             }
-            if FALSE == SetThreadDesktop(handle) {
-                let e = last_error();
-                CloseDesktop(handle);
-                return Err(format!(
-                    "SetThreadDesktop({qualified}) failed: {e} (does this thread already own a window?)"
-                ));
-            }
-            Ok(AttachedDesktop {
-                handle,
-                name: qualified,
-            })
         }
+        Err(last)
     }
 
     pub fn handle(&self) -> HDESK {
@@ -208,13 +216,9 @@ fn in_interactive_winsta<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, 
     }
 }
 
-/// `WinSta0\name`, unless the caller qualified it already.
-fn qualified(desktop: &str) -> String {
-    if desktop.contains('\\') {
-        desktop.to_owned()
-    } else {
-        format!("{}\\{}", INTERACTIVE_WINSTA, desktop)
-    }
+/// The desktop part of a name, dropping any `WinSta0\` prefix.
+fn bare(desktop: &str) -> String {
+    desktop.rsplit('\\').next().unwrap_or(desktop).to_owned()
 }
 
 unsafe fn open_raw(name: &str) -> HDESK {
