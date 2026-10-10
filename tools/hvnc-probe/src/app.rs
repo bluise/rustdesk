@@ -8,7 +8,12 @@ use std::time::Duration;
 use crate::bmp;
 use crate::shadow_desktop::{capture, desktop, input, launch, windows, SHADOW_DESKTOP};
 
+/// Printed on every run: when a report says "it failed", this says which binary produced
+/// it, so an old copy on disk cannot be mistaken for a new one.
+const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10c (open-desktop bare name + attempt report)";
+
 pub fn run(args: &[String]) -> Result<(), String> {
+    println!("{BUILD_STAMP}");
     let (command, rest) = match args.split_first() {
         Some((c, rest)) => (c.as_str(), rest),
         None => return Err(usage()),

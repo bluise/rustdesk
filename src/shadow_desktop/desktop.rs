@@ -114,16 +114,21 @@ pub struct AttachedDesktop {
 impl AttachedDesktop {
     pub fn attach(desktop: &str) -> Result<Self, String> {
         ensure_process_in_interactive_winsta()?;
-        // The bare name is what works here: the process now sits inside WinSta0, so the
-        // desktop resolves there. The fully qualified "WinSta0\name" form that
-        // STARTUPINFOW wants is rejected by OpenDesktopW with ERROR_BAD_PATHNAME (161),
-        // so it stays a fallback only.
-        let mut last = String::new();
-        for candidate in [bare(desktop), desktop.to_owned()] {
+        // The bare name is what should work here: the process now sits inside WinSta0, so
+        // the desktop resolves there. The fully qualified "WinSta0\name" form that
+        // STARTUPINFOW wants is rejected by OpenDesktopW with ERROR_BAD_PATHNAME (161), so
+        // it stays a fallback - and every attempt is reported, so a failure on a real
+        // machine says which name was tried and why each was refused.
+        let mut candidates = vec![bare(desktop)];
+        if candidates[0] != desktop {
+            candidates.push(desktop.to_owned());
+        }
+        let mut attempts: Vec<String> = Vec::new();
+        for candidate in candidates {
             unsafe {
                 let handle = OpenDesktopW(wide(&candidate).as_ptr(), 0, FALSE, DESKTOP_ALL_ACCESS);
                 if handle.is_null() {
-                    last = format!("OpenDesktopW({candidate}) failed: {}", last_error());
+                    attempts.push(format!("OpenDesktopW({candidate}) -> {}", last_error()));
                     continue;
                 }
                 if FALSE == SetThreadDesktop(handle) {
@@ -139,7 +144,10 @@ impl AttachedDesktop {
                 });
             }
         }
-        Err(last)
+        Err(format!(
+            "could not open the shadow desktop; tried: {}",
+            attempts.join("; ")
+        ))
     }
 
     pub fn handle(&self) -> HDESK {
