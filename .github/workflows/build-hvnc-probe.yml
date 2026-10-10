@@ -1,0 +1,51 @@
+name: Build hvnc-probe
+
+# Windows-only probe for the hidden-desktop mechanism (tools/hvnc-probe). It lives
+# outside the workspace and no RustDesk job builds it, so it gets its own manual
+# entry: press "Run workflow" and pick hvnc-probe.exe off the run page.
+#
+# Nothing here runs on push and no existing workflow is touched - workflow_dispatch
+# is the only way in, and the job only reads the repository.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        type: string
+        default: shadow
+        description: Branch that holds tools/hvnc-probe
+      upload-artifact:
+        type: boolean
+        default: true
+        description: Upload build artifacts
+
+permissions:
+  contents: read
+
+env:
+  UPLOAD_ARTIFACT: "${{ inputs['upload-artifact'] }}"
+
+jobs:
+  build-hvnc-probe:
+    name: windows-2022 x64 probe
+    runs-on: windows-2022
+    steps:
+      - name: Checkout ${{ inputs.ref }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Build
+        working-directory: tools/hvnc-probe
+        run: cargo build --release --locked
+
+      - name: Upload artifact
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hvnc-probe
+          path: tools/hvnc-probe/target/release/hvnc-probe.exe
