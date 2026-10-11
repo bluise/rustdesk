@@ -99,7 +99,7 @@ pub fn enable(program: Option<&str>, fps: u32, frame_size: Option<FrameSize>) ->
         focus: None,
         fps: fps.max(1),
         frame_size,
-        size: super::capture::desktop_size()?,
+        size: super::capture::desktop_size(None)?,
     });
     Ok(())
 }
