@@ -11,7 +11,7 @@ use crate::shadow_desktop::{capture, desktop, input, launch, windows, SHADOW_DES
 
 /// Printed on every run: when a report says "it failed", this says which binary produced
 /// it, so an old copy on disk cannot be mistaken for a new one.
-const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10g (auto-target the control under the point)";
+const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10h (bottom-up compositing)";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     println!("{BUILD_STAMP}");

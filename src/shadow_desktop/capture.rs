@@ -252,6 +252,10 @@ fn blt_to_frame(screen_dc: HDC, width: i32, height: i32, rop: u32) -> Result<Fra
 ///
 /// A window renders through PrintWindow whether or not its desktop is on screen, which is
 /// the only path that worked on a real machine here.
+///
+/// EnumWindows walks the Z-order from the top down, so the windows are collected first and
+/// painted in reverse: painting them as they are enumerated would put the lowest one on top
+/// of everything.
 fn print_window_frame(width: i32, height: i32) -> Result<Frame, String> {
     unsafe {
         let screen_dc = GetDC(ptr::null_mut());
@@ -275,14 +279,21 @@ fn print_window_frame(width: i32, height: i32) -> Result<Frame, String> {
         }
         let previous = SelectObject(canvas_dc, canvas_bmp as _);
 
-        let mut state = Canvas {
-            dc: canvas_dc,
-            printed: 0,
-            failed: 0,
-            width,
-            height,
-        };
-        EnumWindows(Some(print_window), &mut state as *mut Canvas as LPARAM);
+        let mut windows: Vec<(HWND, RECT)> = Vec::new();
+        EnumWindows(
+            Some(collect_visible),
+            &mut windows as *mut Vec<(HWND, RECT)> as LPARAM,
+        );
+
+        let mut printed = 0usize;
+        let mut failed = 0usize;
+        for (hwnd, rect) in windows.iter().rev() {
+            match print_onto(canvas_dc, width, height, *hwnd, *rect) {
+                Ok(true) => printed += 1,
+                Ok(false) => failed += 1,
+                Err(e) => eprintln!("[shadow_desktop] {e}"),
+            }
+        }
 
         let frame = read_frame(canvas_dc, canvas_bmp, width, height);
         SelectObject(canvas_dc, previous);
@@ -291,26 +302,16 @@ fn print_window_frame(width: i32, height: i32) -> Result<Frame, String> {
         ReleaseDC(ptr::null_mut(), screen_dc);
 
         let frame = frame?;
-        if state.printed == 0 {
-            return Err(format!(
-                "PrintWindow rendered no window ({} refused)",
-                state.failed
-            ));
+        if printed == 0 {
+            return Err(format!("PrintWindow rendered no window ({failed} refused)"));
         }
         Ok(frame)
     }
 }
 
-struct Canvas {
-    dc: HDC,
-    printed: usize,
-    failed: usize,
-    width: i32,
-    height: i32,
-}
-
-unsafe extern "system" fn print_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let canvas = &mut *(lparam as *mut Canvas);
+/// Collects visible windows with their rectangles, in the Z-order EnumWindows gives.
+unsafe extern "system" fn collect_visible(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let windows = &mut *(lparam as *mut Vec<(HWND, RECT)>);
     if IsWindowVisible(hwnd) == FALSE {
         return TRUE;
     }
@@ -318,18 +319,31 @@ unsafe extern "system" fn print_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if GetWindowRect(hwnd, &mut rect) == FALSE {
         return TRUE;
     }
+    if rect.right - rect.left <= 0 || rect.bottom - rect.top <= 0 {
+        return TRUE;
+    }
+    windows.push((hwnd, rect));
+    TRUE
+}
+
+/// Renders one window onto the canvas at its own position. `Ok(false)` means the window
+/// refused to render; the canvas is left as it was.
+unsafe fn print_onto(
+    canvas_dc: HDC,
+    canvas_w: i32,
+    canvas_h: i32,
+    hwnd: HWND,
+    rect: RECT,
+) -> Result<bool, String> {
     let (x, y) = (rect.left, rect.top);
     let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
-    if w <= 0 || h <= 0 {
-        return TRUE;
-    }
     // Off-desktop windows are simply clipped; the canvas keeps them out of frame.
-    if x >= canvas.width || y >= canvas.height || x + w <= 0 || y + h <= 0 {
-        return TRUE;
+    if x >= canvas_w || y >= canvas_h || x + w <= 0 || y + h <= 0 {
+        return Ok(true);
     }
 
-    let dc = CreateCompatibleDC(canvas.dc);
-    let bmp: HBITMAP = CreateCompatibleBitmap(canvas.dc, w, h);
+    let dc = CreateCompatibleDC(canvas_dc);
+    let bmp: HBITMAP = CreateCompatibleBitmap(canvas_dc, w, h);
     if dc.is_null() || bmp.is_null() {
         if !dc.is_null() {
             DeleteDC(dc);
@@ -337,24 +351,21 @@ unsafe extern "system" fn print_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if !bmp.is_null() {
             DeleteObject(bmp as _);
         }
-        canvas.failed += 1;
-        return TRUE;
+        return Ok(false);
     }
     let previous = SelectObject(dc, bmp as _);
     // Some windows ignore the full-content flag, so it is retried without it rather than
     // lost.
-    if PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT) == FALSE && PrintWindow(hwnd, dc, 0) == FALSE {
-        canvas.failed += 1;
-    } else if BitBlt(canvas.dc, x, y, w, h, dc, 0, 0, SRCCOPY) == FALSE {
+    let rendered = PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT) != FALSE
+        || PrintWindow(hwnd, dc, 0) != FALSE;
+    let composited = rendered && BitBlt(canvas_dc, x, y, w, h, dc, 0, 0, SRCCOPY) != FALSE;
+    if rendered && !composited {
         eprintln!("[shadow_desktop] compositing failed: {}", last_error());
-        canvas.failed += 1;
-    } else {
-        canvas.printed += 1;
     }
     SelectObject(dc, previous);
     DeleteObject(bmp as _);
     DeleteDC(dc);
-    TRUE
+    Ok(composited)
 }
 
 /// A cheap look at whether anything was drawn at all: a desktop whose capture path is
