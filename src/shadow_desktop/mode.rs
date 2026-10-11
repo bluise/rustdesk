@@ -23,6 +23,17 @@ pub const DEFAULT_PROGRAM: &str = "explorer.exe";
 /// host's own limit rather than the client's.
 pub const DEFAULT_FPS: u32 = 10;
 
+/// The size frames are produced at, if the host was told to scale them down.
+///
+/// The desktop itself always keeps the session's resolution: changing that would change the
+/// physical screen, which is the one thing this mode must not do. Scaling the frames only
+/// trades detail for bandwidth and CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameSize {
+    pub width: i32,
+    pub height: i32,
+}
+
 struct Session {
     /// Closing its last handle destroys the desktop and everything on it.
     _desktop: Desktop,
@@ -30,6 +41,7 @@ struct Session {
     cursor: (i32, i32),
     focus: Option<isize>,
     fps: u32,
+    frame_size: Option<FrameSize>,
 }
 
 static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
@@ -55,7 +67,7 @@ pub fn is_active() -> bool {
 ///
 /// Doing nothing when it is already on makes this safe to call from wherever the setting is
 /// read.
-pub fn enable(program: Option<&str>, fps: u32) -> Result<(), String> {
+pub fn enable(program: Option<&str>, fps: u32, frame_size: Option<FrameSize>) -> Result<(), String> {
     let mut guard = slot()
         .lock()
         .map_err(|_| "shadow session lock is poisoned".to_owned())?;
@@ -82,6 +94,7 @@ pub fn enable(program: Option<&str>, fps: u32) -> Result<(), String> {
         cursor: (0, 0),
         focus: None,
         fps: fps.max(1),
+        frame_size,
     });
     Ok(())
 }
@@ -96,6 +109,11 @@ pub fn disable() {
 
 pub fn fps() -> u32 {
     with(|s| s.fps).unwrap_or(DEFAULT_FPS)
+}
+
+/// The size frames should be scaled to, or `None` to keep the desktop's own resolution.
+pub fn frame_size() -> Option<FrameSize> {
+    with(|s| s.frame_size).flatten()
 }
 
 pub fn cursor() -> Option<(i32, i32)> {
