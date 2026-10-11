@@ -10,7 +10,7 @@ use crate::shadow_desktop::{capture, desktop, input, launch, windows, SHADOW_DES
 
 /// Printed on every run: when a report says "it failed", this says which binary produced
 /// it, so an old copy on disk cannot be mistaken for a new one.
-const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10c (open-desktop bare name + attempt report)";
+const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10d (capture method diagnosis)";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     println!("{BUILD_STAMP}");
@@ -22,6 +22,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "create" => create(rest),
         "launch" => launch_cmd(rest),
         "capture" => capture_cmd(rest),
+        "diag" => diag_cmd(rest),
         "windows" => windows_cmd(rest),
         "click" => click_cmd(rest),
         "move" => move_cmd(rest),
@@ -42,6 +43,7 @@ hvnc-probe <command> [args]
   create  <desktop>                        create the desktop, hold it open until Enter
   launch  <desktop> <program> [args...]    start a program on that desktop
   capture <desktop> <out.bmp> [frames] [interval_ms]
+  diag    <desktop> [out-prefix]           try every capture method and report each
   windows <desktop>                        list the windows living on that desktop
   click   <desktop> <x> <y>                left click at x,y on that desktop
   move    <desktop> <x> <y>                move the pointer there
@@ -88,6 +90,28 @@ fn capture_cmd(rest: &[String]) -> Result<(), String> {
         bmp::write(&path, frame.width, frame.height, &frame.bgra)
             .map_err(|e| format!("writing {path} failed: {e}"))?;
         println!("{path}  {}x{}", frame.width, frame.height);
+    }
+    Ok(())
+}
+
+fn diag_cmd(rest: &[String]) -> Result<(), String> {
+    let name = arg(rest, 0, "<desktop>")?;
+    let prefix = rest.get(1).map(|s| s.as_str()).unwrap_or("diag");
+    let reports = capture::diagnose(name, None)?;
+    println!("capture methods on {name}:");
+    for report in reports {
+        println!(
+            "  {:<26} {}  {}",
+            report.method.label(),
+            if report.ok { "OK  " } else { "FAIL" },
+            report.note
+        );
+        if let Some(frame) = report.frame {
+            let path = format!("{}-{}.bmp", prefix, report.method.label());
+            bmp::write(&path, frame.width, frame.height, &frame.bgra)
+                .map_err(|e| format!("writing {path} failed: {e}"))?;
+            println!("      wrote {path}");
+        }
     }
     Ok(())
 }
