@@ -16,7 +16,7 @@
 use std::mem::{size_of, zeroed};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
@@ -392,12 +392,20 @@ pub struct Worker {
     frames: mpsc::Receiver<Vec<u8>>,
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+    /// The most recent capture failure, for the caller to log. This module has no logger of
+    /// its own - keeping it dependency-free is what lets the probe compile-check it - so a
+    /// worker that keeps failing would otherwise fail silently.
+    last_error: Arc<Mutex<Option<String>>>,
 }
 
 impl Worker {
     /// The next frame, or `None` if none arrived within `timeout`.
     pub fn next_frame(&mut self, timeout: Duration) -> Option<Vec<u8>> {
         self.frames.recv_timeout(timeout).ok()
+    }
+
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().ok().and_then(|e| e.clone())
     }
 }
 
@@ -420,13 +428,22 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
     let (sender, frames) = mpsc::sync_channel(2);
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
+    let last_error = Arc::new(Mutex::new(None));
+    let worker_error = last_error.clone();
+    // The caller has to learn about a refusal to attach. Without this handshake the capturer
+    // looks alive while producing nothing, which is exactly how the first machine test went:
+    // a client waiting for a first frame that never came.
+    let (ready_sender, ready) = mpsc::sync_channel::<Result<(), String>>(1);
 
     let handle = thread::spawn(move || {
         // Held for the life of the thread; the desktop itself is kept alive by the session.
         let _attached = match AttachedDesktop::attach(&desktop) {
-            Ok(attached) => attached,
+            Ok(attached) => {
+                let _ = ready_sender.try_send(Ok(()));
+                attached
+            }
             Err(e) => {
-                eprintln!("[shadow_desktop] capture thread could not attach: {e}");
+                let _ = ready_sender.try_send(Err(format!("capture thread could not attach: {e}")));
                 return;
             }
         };
@@ -440,11 +457,17 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
                     } else {
                         scale_down(&frame, out_width, out_height)
                     };
+                    if let Ok(mut slot) = worker_error.lock() {
+                        *slot = None;
+                    }
                     // A full channel means the consumer is behind: drop this frame.
                     let _ = sender.try_send(data);
                 }
                 Err(e) => {
                     failed += 1;
+                    if let Ok(mut slot) = worker_error.lock() {
+                        *slot = Some(e.clone());
+                    }
                     if failed <= 3 {
                         eprintln!("[shadow_desktop] capture failed: {e}");
                     }
@@ -460,12 +483,19 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
         }
     });
 
+    match ready.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("capture thread did not attach in time".to_owned()),
+    }
+
     Ok(Worker {
         width: out_width as usize,
         height: out_height as usize,
         frames,
         stop,
         handle: Some(handle),
+        last_error,
     })
 }
 

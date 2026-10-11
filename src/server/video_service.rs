@@ -337,6 +337,9 @@ mod shadow_capturer {
         worker: capture::Worker,
         /// A frame is handed out by reference, so it has to live next to the capturer.
         buffer: Vec<u8>,
+        /// The last failure already logged, so a failing capture is reported once per distinct
+        /// reason instead of once per frame.
+        reported: Option<String>,
     }
 
     impl ShadowCapturer {
@@ -347,6 +350,7 @@ mod shadow_capturer {
             Ok(Self {
                 worker,
                 buffer: Vec::new(),
+                reported: None,
             })
         }
     }
@@ -363,7 +367,15 @@ mod shadow_capturer {
                     )))
                 }
                 // The video pipeline already reads this as "nothing new yet".
-                None => Err(Error::new(ErrorKind::TimedOut, "no shadow frame")),
+                None => {
+                    if let Some(e) = self.worker.last_error() {
+                        if self.reported.as_deref() != Some(e.as_str()) {
+                            log::warn!("shadow capture is failing: {e}");
+                            self.reported = Some(e);
+                        }
+                    }
+                    Err(Error::new(ErrorKind::TimedOut, "no shadow frame"))
+                }
             }
         }
 
@@ -399,7 +411,19 @@ fn create_capturer(
     #[cfg(all(windows, feature = "shadow-desktop"))]
     if crate::shadow_desktop::mode::is_active() && display.name() == shadow_capturer::DISPLAY_NAME
     {
-        return Ok(Box::new(shadow_capturer::ShadowCapturer::new()?));
+        // Logged at both ends: without it a capturer that never produces a frame is
+        // indistinguishable from one that was never created, which is what made the first
+        // machine test unreadable.
+        match shadow_capturer::ShadowCapturer::new() {
+            Ok(capturer) => {
+                log::info!("shadow capturer is up for display {_current}");
+                return Ok(Box::new(capturer));
+            }
+            Err(e) => {
+                log::error!("shadow capturer could not start: {e}");
+                bail!("shadow capturer could not start: {e}");
+            }
+        }
     }
 
     #[cfg(not(windows))]
