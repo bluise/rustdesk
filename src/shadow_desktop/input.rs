@@ -15,11 +15,12 @@ use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
 use winapi::shared::windef::{HWND, POINT, RECT};
 use winapi::um::winuser::{
     BringWindowToTop, ClientToScreen, EnumWindows, GetClientRect, GetForegroundWindow,
-    GetSystemMetrics, GetWindowTextW, IsWindowVisible, PostMessageW, RealChildWindowFromPoint,
-    ScreenToClient, SendInput, SetFocus, SetForegroundWindow, WindowFromPoint, INPUT,
-    INPUT_KEYBOARD, INPUT_MOUSE, INPUT_u, KEYBDINPUT, KEYEVENTF_KEYUP, LPINPUT,
-    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT,
-    SM_CXSCREEN, SM_CYSCREEN, WM_CHAR,
+    GetSystemMetrics, GetWindowTextW, IsWindowVisible, MK_LBUTTON, PostMessageW,
+    RealChildWindowFromPoint, ScreenToClient, SendInput, SetFocus, SetForegroundWindow,
+    WindowFromPoint, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, INPUT_u, KEYBDINPUT, KEYEVENTF_KEYUP,
+    LPINPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
+    MOUSEINPUT, SM_CXSCREEN, SM_CYSCREEN, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
 };
 
 use super::desktop::AttachedDesktop;
@@ -254,6 +255,141 @@ unsafe fn deepest_child_at(frame: HWND) -> HWND {
         return frame;
     }
     loop {
+        let mut local = point;
+        if ScreenToClient(current, &mut local) == FALSE {
+            return current;
+        }
+        let child = RealChildWindowFromPoint(current, local);
+        if child.is_null() || child == current {
+            return current;
+        }
+        current = child;
+    }
+}
+
+/// A mouse event to post, as the remote side asked for it.
+#[derive(Debug, Clone, Copy)]
+pub enum MouseAction {
+    Move,
+    LeftDown,
+    LeftUp,
+    Wheel(i32),
+}
+
+/// The window at a point on this desktop, the way a click would find it.
+pub fn window_at(desktop: &str, x: i32, y: i32) -> Result<isize, String> {
+    let desktop = desktop.to_owned();
+    thread::spawn(move || {
+        let _attached = AttachedDesktop::attach(&desktop)?;
+        Ok(unsafe { deepest_at(POINT { x, y }) } as isize)
+    })
+    .join()
+    .map_err(|_| "input thread panicked".to_owned())?
+}
+
+/// Posts a mouse event at `(x, y)` to whatever window is there.
+///
+/// The point arrives in desktop coordinates and the message wants client ones, so it is
+/// converted per window - posting desktop coordinates is how a click lands on the wrong
+/// control or on the frame instead of the field.
+pub fn send_mouse_at(desktop: &str, x: i32, y: i32, action: MouseAction) -> Result<String, String> {
+    let desktop = desktop.to_owned();
+    thread::spawn(move || mouse_at_on_thread(&desktop, x, y, action))
+        .join()
+        .map_err(|_| "input thread panicked".to_owned())?
+}
+
+fn mouse_at_on_thread(
+    desktop: &str,
+    x: i32,
+    y: i32,
+    action: MouseAction,
+) -> Result<String, String> {
+    let _attached = AttachedDesktop::attach(desktop)?;
+    unsafe {
+        let hwnd = deepest_at(POINT { x, y });
+        if hwnd.is_null() {
+            return Err(format!("no window at {x},{y} on this desktop"));
+        }
+        let mut local = POINT { x, y };
+        if ScreenToClient(hwnd, &mut local) == FALSE {
+            return Err(format!("ScreenToClient failed: {}", last_error()));
+        }
+        let lparam = ((local.y as isize) << 16) | (local.x as isize & 0xFFFF);
+        let (msg, wparam) = match action {
+            MouseAction::Move => (WM_MOUSEMOVE, 0usize),
+            MouseAction::LeftDown => (WM_LBUTTONDOWN, MK_LBUTTON as usize),
+            MouseAction::LeftUp => (WM_LBUTTONUP, 0usize),
+            MouseAction::Wheel(delta) => (WM_MOUSEWHEEL, ((delta as isize) << 16) as usize),
+        };
+        if PostMessageW(hwnd, msg, wparam, lparam) == FALSE {
+            return Err(format!("PostMessage({msg:#x}) failed: {}", last_error()));
+        }
+        // Remember where the click went: keyboard input follows it, because a hidden desktop
+        // never has a foreground window to ask.
+        if let MouseAction::LeftDown = action {
+            super::mode::set_focus(Some(hwnd as isize));
+        }
+        Ok(format!(
+            "mouse {msg:#x} to {:#x} client {},{}",
+            hwnd as usize, local.x, local.y
+        ))
+    }
+}
+
+/// Posts one half of a keystroke to a window of this desktop.
+///
+/// The down half also posts the character, which is what text controls read; the up half
+/// only closes the key. `hwnd` defaults to the window a click last landed on.
+pub fn post_key(
+    desktop: &str,
+    hwnd: Option<isize>,
+    vk: u16,
+    ch: Option<char>,
+    down: bool,
+) -> Result<String, String> {
+    let desktop = desktop.to_owned();
+    thread::spawn(move || post_key_on_thread(&desktop, hwnd, vk, ch, down))
+        .join()
+        .map_err(|_| "input thread panicked".to_owned())?
+}
+
+fn post_key_on_thread(
+    desktop: &str,
+    hwnd: Option<isize>,
+    vk: u16,
+    ch: Option<char>,
+    down: bool,
+) -> Result<String, String> {
+    let _attached = AttachedDesktop::attach(desktop)?;
+    let (target, label) = match hwnd.or_else(super::mode::focus) {
+        Some(handle) => (handle as HWND, format!("{handle:#x}")),
+        None => pick_target(None)?,
+    };
+    unsafe {
+        if down {
+            if PostMessageW(target, WM_KEYDOWN, vk as usize, 0) == FALSE {
+                return Err(format!("PostMessage(WM_KEYDOWN) failed: {}", last_error()));
+            }
+            if let Some(ch) = ch {
+                if PostMessageW(target, WM_CHAR, ch as usize, 0) == FALSE {
+                    return Err(format!("PostMessage(WM_CHAR) failed: {}", last_error()));
+                }
+            }
+        } else if PostMessageW(target, WM_KEYUP, vk as usize, 0) == FALSE {
+            return Err(format!("PostMessage(WM_KEYUP) failed: {}", last_error()));
+        }
+    }
+    Ok(format!("key {vk:#x} -> {label}"))
+}
+
+/// Walks from the window containing `point` down to the deepest child, the way a click does.
+unsafe fn deepest_at(point: POINT) -> HWND {
+    let mut current = WindowFromPoint(point);
+    loop {
+        if current.is_null() {
+            return current;
+        }
         let mut local = point;
         if ScreenToClient(current, &mut local) == FALSE {
             return current;
