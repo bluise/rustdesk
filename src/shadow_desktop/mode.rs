@@ -121,6 +121,55 @@ pub fn frame_size() -> Option<FrameSize> {
     with(|s| s.frame_size).flatten()
 }
 
+/// Reads the frame size setting: `WxH`, or `N%` of the desktop's own size.
+///
+/// Anything unusable - including an empty value, which is what an unset option reads as -
+/// means "leave the frames at the desktop's resolution" rather than a guess.
+pub fn parse_frame_size(value: &str, desktop: (i32, i32)) -> Option<FrameSize> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(percent) = value.strip_suffix('%') {
+        let percent: i32 = percent.trim().parse().ok()?;
+        if percent <= 0 {
+            return None;
+        }
+        let (width, height) = desktop;
+        return Some(FrameSize {
+            width: (width * percent / 100).max(1),
+            height: (height * percent / 100).max(1),
+        });
+    }
+    let (width, height) = value.split_once(['x', 'X'])?;
+    let width: i32 = width.trim().parse().ok()?;
+    let height: i32 = height.trim().parse().ok()?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(FrameSize { width, height })
+}
+
+/// Reads the frame rate setting, clamped to something a desktop can actually deliver.
+pub fn parse_fps(value: &str) -> u32 {
+    value
+        .trim()
+        .parse::<u32>()
+        .map(|fps| fps.clamp(1, 60))
+        .unwrap_or(DEFAULT_FPS)
+}
+
+/// Whether the mode should be on.
+///
+/// An unset option means on: the setting only exists in a build that carries the mode, so
+/// "unset" and "off" would mean the same thing - and then the build would do nothing.
+pub fn wanted(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "y" | "yes" | "true" | "1" | "on"
+    )
+}
+
 pub fn cursor() -> Option<(i32, i32)> {
     with(|s| s.cursor)
 }

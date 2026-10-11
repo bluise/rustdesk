@@ -80,11 +80,39 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    // Brings the hidden desktop up before the server starts, when the setting asks for it.
+    // The setting exists only in a build that carries the mode, so an unset value means on -
+    // off would be the same as not shipping it at all.
+    #[cfg(all(windows, feature = "shadow-desktop"))]
+    fn start_shadow_desktop() {
+        use base::config::keys::{
+            OPTION_SHADOW_DESKTOP, OPTION_SHADOW_DESKTOP_FPS, OPTION_SHADOW_DESKTOP_SIZE,
+        };
+        use hbb_common::config::Config;
+
+        use crate::shadow_desktop::{capture, mode};
+
+        if !mode::wanted(&Config::get_option(OPTION_SHADOW_DESKTOP)) {
+            log::info!("shadow desktop is turned off");
+            return;
+        }
+        let desktop = capture::desktop_size(None).unwrap_or((1920, 1080));
+        let fps = mode::parse_fps(&Config::get_option(OPTION_SHADOW_DESKTOP_FPS));
+        let size =
+            mode::parse_frame_size(&Config::get_option(OPTION_SHADOW_DESKTOP_SIZE), desktop);
+        match mode::enable(None, fps, size) {
+            Ok(()) => log::info!("shadow desktop is up, frames at {fps} fps"),
+            Err(e) => log::error!("shadow desktop could not start: {e}"),
+        }
+    }
+
     #[cfg(all(feature = "headless", not(feature = "flutter")))]
     if args.is_empty() {
         // Windowless daemon build: there is no UI to fall through to, so run the host server in
         // this process and stay here instead of entering the interactive/portable-service paths.
         hbb_common::init_log(false, "server");
+        #[cfg(all(windows, feature = "shadow-desktop"))]
+        start_shadow_desktop();
         crate::start_server(true, no_server);
         return None;
     }

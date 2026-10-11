@@ -137,6 +137,11 @@ pub const OPTION_HIDE_USERNAME_ON_CARD: &str = "hide-username-on-card";
 pub const OPTION_HIDE_HELP_CARDS: &str = "hide-help-cards";
 pub const OPTION_DEFAULT_CONNECT_PASSWORD: &str = "default-connect-password";
 pub const OPTION_HIDE_TRAY: &str = "hide-tray";
+// Shadow desktop (the windowless daemon's hidden screen). Only meaningful in builds with the
+// `shadow-desktop` feature; asking for one of these elsewhere returns nothing.
+pub const OPTION_SHADOW_DESKTOP: &str = "shadow-desktop";
+pub const OPTION_SHADOW_DESKTOP_FPS: &str = "shadow-desktop-fps";
+pub const OPTION_SHADOW_DESKTOP_SIZE: &str = "shadow-desktop-size";
 pub const OPTION_ONE_WAY_CLIPBOARD_REDIRECTION: &str = "one-way-clipboard-redirection";
 pub const OPTION_ALLOW_LOGON_SCREEN_PASSWORD: &str = "allow-logon-screen-password";
 pub const OPTION_ALLOW_DEEP_LINK_PASSWORD: &str = "allow-deep-link-password";

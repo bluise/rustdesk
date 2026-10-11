@@ -956,10 +956,13 @@ impl Display {
     /// built from it.
     pub fn virtual_display(device_name: &str, width: i32, height: i32) -> Self {
         let mut desc: DXGI_OUTPUT_DESC = unsafe { std::mem::zeroed() };
+        // Read the capacity before borrowing the array: asking for its length inside the
+        // iterator chain is a second borrow of something already borrowed mutably.
+        let capacity = desc.DeviceName.len() - 1;
         for (slot, unit) in desc
             .DeviceName
             .iter_mut()
-            .zip(device_name.encode_utf16().take(desc.DeviceName.len() - 1))
+            .zip(device_name.encode_utf16().take(capacity))
         {
             *slot = unit;
         }
