@@ -101,6 +101,11 @@ impl Drop for Desktop {
     }
 }
 
+// A desktop handle is a plain kernel-object handle: it can be created on one thread and
+// closed on another, so the wrapper is safe to move between threads - which is what lets a
+// session hold it in a global.
+unsafe impl Send for Desktop {}
+
 /// A desktop handle that is also attached to the calling thread.
 ///
 /// Capture and input both have to go through this: `GetDC(NULL)` and `SendInput` act on

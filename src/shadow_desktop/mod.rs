@@ -21,6 +21,7 @@ pub mod capture;
 pub mod desktop;
 pub mod input;
 pub mod launch;
+pub mod mode;
 pub mod windows;
 
 /// The desktop everything in this mode runs on.
