@@ -311,18 +311,12 @@ fn print_window_frame(width: i32, height: i32) -> Result<Frame, String> {
     }
 }
 
-/// Shell windows whose `PrintWindow` can block forever: the desktop and taskbar windows
-/// (`Progman`, `WorkerW`, the two tray windows) never return, and the composition bridge only
-/// draws the wallpaper behind the real content. `PrintWindow` has no timeout, so one of these
-/// left the capture thread parked for good - no frame and no error.
+/// The Win11 desktop composition bridge is the class observed to block `PrintWindow` forever:
+/// `PrintWindow` has no timeout, so it left the capture thread parked for good - no frame and
+/// no error. `Progman` / `WorkerW` / `Shell_TrayWnd` must NOT be skipped: they carry the
+/// desktop background and the taskbar, and skipping them made the picture go black.
 fn is_blocking_class(hwnd: HWND) -> bool {
-    const BLOCKING: [&str; 5] = [
-        "Progman",
-        "WorkerW",
-        "Shell_TrayWnd",
-        "Shell_SecondaryTrayWnd",
-        "Windows.UI.Composition.DesktopWindowContentBridge",
-    ];
+    const BLOCKING: [&str; 1] = ["Windows.UI.Composition.DesktopWindowContentBridge"];
     let mut buf = [0u16; 256];
     let len = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
     if len <= 0 {

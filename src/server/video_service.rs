@@ -327,7 +327,8 @@ pub fn new(source: VideoSource, idx: usize) -> GenericService {
 #[cfg(all(windows, feature = "shadow-desktop"))]
 mod shadow_capturer {
     use std::io::{Error, ErrorKind};
-    use std::time::{Duration, Instant};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     // The file's own `use` does not reach into a nested module, so this one asks for the
     // logger itself.
@@ -337,19 +338,35 @@ mod shadow_capturer {
 
     pub const DISPLAY_NAME: &str = SHADOW_DISPLAY_NAME;
 
-    /// A stalled worker is reported at most this often, so the log shows the age of the last
-    /// frame instead of filling up.
+    /// A stall is reported at most this often, so the log shows the age of the last frame
+    /// instead of filling up.
     const STALL_WARN_INTERVAL: Duration = Duration::from_secs(5);
+
+    /// Process-wide, so a capturer that gets recreated every second cannot reset the throttle
+    /// and hide a stall that has already lasted a while. Seconds since the Unix epoch; 0 means
+    /// "never warned".
+    static LAST_STALL_WARN: AtomicU64 = AtomicU64::new(0);
+
+    fn unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default()
+    }
 
     pub struct ShadowCapturer {
         worker: capture::Worker,
-        /// A frame is handed out by reference, so it has to live next to the capturer.
-        buffer: Vec<u8>,
+        /// The newest frame, handed out by reference so it lives next to the capturer. A late
+        /// frame repeats this one instead of erroring, which keeps the stream alive; `None`
+        /// until the first frame arrives.
+        last_frame: Option<Vec<u8>>,
         /// The last failure already logged, so a failing capture is reported once per distinct
         /// reason instead of once per frame.
         reported: Option<String>,
-        /// When the stall warning was last printed, to keep it to one line per few seconds.
-        last_stall_warn: Instant,
+        /// When the "repeating the previous frame" line was last printed.
+        last_repeat_log: Instant,
+        /// Whether the delivered frame size has already been logged for this capturer.
+        logged_frame: bool,
     }
 
     impl ShadowCapturer {
@@ -359,10 +376,25 @@ mod shadow_capturer {
                 .map_err(|e| Error::new(ErrorKind::Other, e))?;
             Ok(Self {
                 worker,
-                buffer: Vec::new(),
+                last_frame: None,
                 reported: None,
-                last_stall_warn: Instant::now(),
+                last_repeat_log: Instant::now(),
+                logged_frame: false,
             })
+        }
+
+        /// Reports a stalled worker, at most once per interval across every capturer instance.
+        fn warn_stall(&self) {
+            let now = unix_secs();
+            let last = LAST_STALL_WARN.load(Ordering::Relaxed);
+            if now.saturating_sub(last) >= STALL_WARN_INTERVAL.as_secs() {
+                LAST_STALL_WARN.store(now, Ordering::Relaxed);
+                log::warn!(
+                    "shadow capturer produced no frame for {:.1}s (method {})",
+                    self.worker.since_last_frame().as_secs_f64(),
+                    self.worker.method().label()
+                );
+            }
         }
     }
 
@@ -370,14 +402,19 @@ mod shadow_capturer {
         fn frame<'a>(&'a mut self, timeout: Duration) -> std::io::Result<scrap::Frame<'a>> {
             match self.worker.next_frame(timeout) {
                 Some(frame) => {
-                    self.buffer = frame;
-                    Ok(scrap::Frame::PixelBuffer(scrap::PixelBuffer::with_BGRA(
-                        &self.buffer,
-                        self.worker.width,
-                        self.worker.height,
-                    )))
+                    if !self.logged_frame {
+                        log::info!(
+                            "shadow capturer frame: {}x{} ({} bytes)",
+                            self.worker.width,
+                            self.worker.height,
+                            frame.len()
+                        );
+                        self.logged_frame = true;
+                    }
+                    self.last_frame = Some(frame);
                 }
-                // The video pipeline already reads this as "nothing new yet".
+                // A late frame is not an error: repeating the previous one keeps the stream
+                // alive, which is what the client needs.
                 None => {
                     if let Some(e) = self.worker.last_error() {
                         if self.reported.as_deref() != Some(e.as_str()) {
@@ -387,17 +424,26 @@ mod shadow_capturer {
                     }
                     // A worker parked in PrintWindow sets no error, so without this the stall
                     // is silent. The age of the newest frame is what makes it visible.
-                    if self.last_stall_warn.elapsed() >= STALL_WARN_INTERVAL {
-                        log::warn!(
-                            "shadow capturer produced no frame for {:.1}s (method {})",
-                            self.worker.since_last_frame().as_secs_f64(),
-                            self.worker.method().label()
-                        );
-                        self.last_stall_warn = Instant::now();
+                    self.warn_stall();
+                    if self.last_frame.is_none() {
+                        // The constructor waits for a first frame, so this is unreachable.
+                        return Err(Error::new(ErrorKind::TimedOut, "no shadow frame"));
                     }
-                    Err(Error::new(ErrorKind::TimedOut, "no shadow frame"))
+                    if self.last_repeat_log.elapsed() >= STALL_WARN_INTERVAL {
+                        log::debug!("shadow capturer is repeating the previous frame");
+                        self.last_repeat_log = Instant::now();
+                    }
                 }
             }
+            let buffer = self
+                .last_frame
+                .as_ref()
+                .ok_or_else(|| Error::new(ErrorKind::TimedOut, "no shadow frame"))?;
+            Ok(scrap::Frame::PixelBuffer(scrap::PixelBuffer::with_BGRA(
+                buffer,
+                self.worker.width,
+                self.worker.height,
+            )))
         }
 
         fn is_gdi(&self) -> bool {
