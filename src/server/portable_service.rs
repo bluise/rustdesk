@@ -1554,8 +1554,8 @@ pub mod client {
 
         use crate::shadow_desktop::{input, mode, SHADOW_DESKTOP};
         use crate::common::input::{
-            MOUSE_TYPE_DOWN, MOUSE_TYPE_MASK, MOUSE_TYPE_MOVE_RELATIVE, MOUSE_TYPE_UP,
-            MOUSE_TYPE_WHEEL,
+            MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_WHEEL, MOUSE_TYPE_DOWN,
+            MOUSE_TYPE_MASK, MOUSE_TYPE_MOVE_RELATIVE, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL,
         };
 
         /// Returns true when the event was handled here and must not go on to the platform.
@@ -1584,8 +1584,22 @@ pub mod client {
                 return true;
             };
             let action = match event {
-                MOUSE_TYPE_DOWN => input::MouseAction::LeftDown,
-                MOUSE_TYPE_UP => input::MouseAction::LeftUp,
+                // Which button is in the top bits of the mask; the event type alone says
+                // only that one of them moved. Reading it as "the left one" turned every
+                // right-click into a left one, and the desktop's context menu with it.
+                MOUSE_TYPE_DOWN | MOUSE_TYPE_UP => {
+                    let button = match evt.mask >> 3 {
+                        MOUSE_BUTTON_RIGHT => input::MouseButton::Right,
+                        MOUSE_BUTTON_WHEEL => input::MouseButton::Middle,
+                        MOUSE_BUTTON_LEFT => input::MouseButton::Left,
+                        _ => return true,
+                    };
+                    if event == MOUSE_TYPE_DOWN {
+                        input::MouseAction::Down(button)
+                    } else {
+                        input::MouseAction::Up(button)
+                    }
+                }
                 MOUSE_TYPE_WHEEL => input::MouseAction::Wheel(evt.y),
                 _ => input::MouseAction::Move,
             };

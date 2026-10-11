@@ -14,13 +14,14 @@ use std::time::Duration;
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
 use winapi::shared::windef::{HWND, POINT, RECT};
 use winapi::um::winuser::{
-    BringWindowToTop, ClientToScreen, EnumWindows, GetClientRect, GetForegroundWindow,
-    GetSystemMetrics, GetWindowTextW, IsWindowVisible, MK_LBUTTON, PostMessageW,
+    BringWindowToTop, ClientToScreen, EnumWindows, GetClientRect, GetCursorPos,
+    GetForegroundWindow, GetSystemMetrics, GetWindowTextW, IsWindowVisible, PostMessageW,
     RealChildWindowFromPoint, ScreenToClient, SendInput, SetFocus, SetForegroundWindow,
     WindowFromPoint, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, INPUT_u, KEYBDINPUT, KEYEVENTF_KEYUP,
-    LPINPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-    MOUSEINPUT, SM_CXSCREEN, SM_CYSCREEN, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    LPINPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SM_CXSCREEN, SM_CYSCREEN, WM_CHAR,
+    WM_KEYDOWN, WM_KEYUP,
 };
 
 use super::desktop::AttachedDesktop;
@@ -54,12 +55,12 @@ fn send_on_thread(desktop: &str, actions: &[Action]) -> Result<(), String> {
     for action in actions {
         match *action {
             Action::MouseMove { x, y } => {
-                send_mouse(x, y, 0, screen_w, screen_h)?;
+                send_mouse(x, y, 0, 0, screen_w, screen_h)?;
             }
             Action::LeftClick { x, y } => {
-                send_mouse(x, y, MOUSEEVENTF_LEFTDOWN, screen_w, screen_h)?;
+                send_mouse(x, y, MOUSEEVENTF_LEFTDOWN, 0, screen_w, screen_h)?;
                 thread::sleep(Duration::from_millis(20));
-                send_mouse(x, y, MOUSEEVENTF_LEFTUP, screen_w, screen_h)?;
+                send_mouse(x, y, MOUSEEVENTF_LEFTUP, 0, screen_w, screen_h)?;
             }
             Action::KeyDown { vk } => send_key(vk, false)?,
             Action::KeyUp { vk } => send_key(vk, true)?,
@@ -69,7 +70,14 @@ fn send_on_thread(desktop: &str, actions: &[Action]) -> Result<(), String> {
     Ok(())
 }
 
-fn send_mouse(x: i32, y: i32, flags: u32, screen_w: i32, screen_h: i32) -> Result<(), String> {
+fn send_mouse(
+    x: i32,
+    y: i32,
+    flags: u32,
+    wheel: i32,
+    screen_w: i32,
+    screen_h: i32,
+) -> Result<(), String> {
     // Absolute mouse events are normalised over the primary monitor's extent.
     let nx = normalise(x, screen_w);
     let ny = normalise(y, screen_h);
@@ -80,7 +88,7 @@ fn send_mouse(x: i32, y: i32, flags: u32, screen_w: i32, screen_h: i32) -> Resul
             *u.mi_mut() = MOUSEINPUT {
                 dx: nx,
                 dy: ny,
-                mouseData: 0,
+                mouseData: wheel as u32,
                 dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | flags,
                 time: 0,
                 dwExtraInfo: INPUT_TAG,
@@ -267,12 +275,20 @@ unsafe fn deepest_child_at(frame: HWND) -> HWND {
     }
 }
 
-/// A mouse event to post, as the remote side asked for it.
+/// The button a mouse event is about.
+#[derive(Debug, Clone, Copy)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+/// A mouse event to inject, as the remote side asked for it.
 #[derive(Debug, Clone, Copy)]
 pub enum MouseAction {
     Move,
-    LeftDown,
-    LeftUp,
+    Down(MouseButton),
+    Up(MouseButton),
     Wheel(i32),
 }
 
@@ -287,11 +303,14 @@ pub fn window_at(desktop: &str, x: i32, y: i32) -> Result<isize, String> {
     .map_err(|_| "input thread panicked".to_owned())?
 }
 
-/// Posts a mouse event at `(x, y)` to whatever window is there.
+/// Injects a mouse event at `(x, y)` into this desktop.
 ///
-/// The point arrives in desktop coordinates and the message wants client ones, so it is
-/// converted per window - posting desktop coordinates is how a click lands on the wrong
-/// control or on the frame instead of the field.
+/// Real input rather than a posted message. A posted `WM_LBUTTONDOWN` reaches a control
+/// that paints a selection and stops there: the desktop's own cursor never moves and the
+/// real button state never changes, so everything Windows decides for itself is missing -
+/// the title bar and its close button, activation, dragging, and the shell's handling of
+/// the desktop and its icons. A shell that is handed a message it did not see a button
+/// press for selects the icon and refuses to open it.
 pub fn send_mouse_at(desktop: &str, x: i32, y: i32, action: MouseAction) -> Result<String, String> {
     let desktop = desktop.to_owned();
     thread::spawn(move || mouse_at_on_thread(&desktop, x, y, action))
@@ -307,8 +326,7 @@ fn mouse_at_on_thread(
 ) -> Result<String, String> {
     // A move carries its position and becomes the point later events act on. Button and
     // wheel events carry none - the protocol leaves their x/y zero - so they act on that
-    // remembered point; posting them at the point they arrived with sent every click to
-    // the window at (0,0), the desktop root.
+    // remembered point; acting on the point they arrived with sent every click to (0,0).
     let (x, y) = match action {
         MouseAction::Move => {
             super::mode::set_cursor((x, y));
@@ -317,35 +335,38 @@ fn mouse_at_on_thread(
         _ => super::mode::cursor().unwrap_or((x, y)),
     };
     let _attached = AttachedDesktop::attach(desktop)?;
-    unsafe {
-        let hwnd = deepest_at(POINT { x, y });
-        if hwnd.is_null() {
-            return Err(format!("no window at {x},{y} on this desktop"));
-        }
-        let mut local = POINT { x, y };
-        if ScreenToClient(hwnd, &mut local) == FALSE {
-            return Err(format!("ScreenToClient failed: {}", last_error()));
-        }
-        let lparam = ((local.y as isize) << 16) | (local.x as isize & 0xFFFF);
-        let (msg, wparam) = match action {
-            MouseAction::Move => (WM_MOUSEMOVE, 0usize),
-            MouseAction::LeftDown => (WM_LBUTTONDOWN, MK_LBUTTON as usize),
-            MouseAction::LeftUp => (WM_LBUTTONUP, 0usize),
-            MouseAction::Wheel(delta) => (WM_MOUSEWHEEL, ((delta as isize) << 16) as usize),
-        };
-        if PostMessageW(hwnd, msg, wparam, lparam) == FALSE {
-            return Err(format!("PostMessage({msg:#x}) failed: {}", last_error()));
-        }
-        // Remember where the click went: keyboard input follows it, because a hidden desktop
-        // never has a foreground window to ask.
-        if let MouseAction::LeftDown = action {
+    let (screen_w, screen_h) =
+        unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    let (flags, wheel) = match action {
+        MouseAction::Move => (0, 0),
+        MouseAction::Down(MouseButton::Left) => (MOUSEEVENTF_LEFTDOWN, 0),
+        MouseAction::Up(MouseButton::Left) => (MOUSEEVENTF_LEFTUP, 0),
+        MouseAction::Down(MouseButton::Right) => (MOUSEEVENTF_RIGHTDOWN, 0),
+        MouseAction::Up(MouseButton::Right) => (MOUSEEVENTF_RIGHTUP, 0),
+        MouseAction::Down(MouseButton::Middle) => (MOUSEEVENTF_MIDDLEDOWN, 0),
+        MouseAction::Up(MouseButton::Middle) => (MOUSEEVENTF_MIDDLEUP, 0),
+        MouseAction::Wheel(delta) => (MOUSEEVENTF_WHEEL, delta),
+    };
+    send_mouse(x, y, flags, wheel, screen_w, screen_h)?;
+    // Read the desktop's own cursor back: it is the one thing that says the event landed
+    // here rather than on the desktop the user is looking at.
+    let mut at = POINT { x: -1, y: -1 };
+    let where_ = if unsafe { GetCursorPos(&mut at) } != FALSE {
+        format!("cursor {},{}", at.x, at.y)
+    } else {
+        format!("cursor unreadable: {}", last_error())
+    };
+    let mut note = format!("mouse {action:?} at {x},{y} ({where_})");
+    // Remember where a click landed: keyboard input follows it, because a hidden desktop
+    // never has a foreground window to ask.
+    if let MouseAction::Down(_) = action {
+        let hwnd = unsafe { deepest_at(POINT { x, y }) };
+        if !hwnd.is_null() {
             super::mode::set_focus(Some(hwnd as isize));
+            note.push_str(&format!(" on {:#x}", hwnd as usize));
         }
-        Ok(format!(
-            "mouse {msg:#x} to {:#x} client {},{}",
-            hwnd as usize, local.x, local.y
-        ))
     }
+    Ok(note)
 }
 
 /// Posts one half of a keystroke to a window of this desktop.
