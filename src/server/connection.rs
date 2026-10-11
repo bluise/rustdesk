@@ -4536,6 +4536,15 @@ impl Connection {
 
     async fn handle_switch_display(&mut self, s: SwitchDisplay) {
         let display_idx = s.display as usize;
+        // Tell the shadow mode which screen is on view: the entry listed first is the hidden
+        // desktop, everything after it is a real one, and input follows the operator's eyes.
+        #[cfg(all(windows, feature = "shadow-desktop"))]
+        if crate::shadow_desktop::mode::is_active() {
+            // The shadow desktop is the entry listed first; everything after it is a real
+            // screen. The keyboard path has no connection to ask about, so the last switch
+            // is what it goes by.
+            crate::shadow_desktop::mode::set_viewing_shadow_any(display_idx == 0);
+        }
         if self.display_idx != display_idx {
             if let Some(server) = self.server.upgrade() {
                 if !self.switch_display_to(display_idx, server.clone()) {

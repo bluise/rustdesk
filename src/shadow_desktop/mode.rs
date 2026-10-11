@@ -13,6 +13,7 @@
 //! program started on it - alive.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::desktop::Desktop;
@@ -176,4 +177,19 @@ pub fn is_viewing_shadow(conn: i32) -> bool {
         .ok()
         .and_then(|map| map.get(&conn).copied())
         .unwrap_or(true)
+}
+
+/// The same question without a connection to ask about.
+///
+/// Keyboard input arrives without a connection id, and the shadow desktop is one screen
+/// shared by whoever is connected, so the last switch to say which screen is on view is
+/// what the keyboard path goes by.
+static VIEWING_SHADOW_ANY: AtomicBool = AtomicBool::new(true);
+
+pub fn set_viewing_shadow_any(shadow: bool) {
+    VIEWING_SHADOW_ANY.store(shadow, Ordering::SeqCst);
+}
+
+pub fn is_viewing_shadow_any() -> bool {
+    VIEWING_SHADOW_ANY.load(Ordering::SeqCst)
 }
