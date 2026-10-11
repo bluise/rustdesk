@@ -6,11 +6,12 @@ use std::io::Write;
 use std::time::Duration;
 
 use crate::bmp;
+use crate::target;
 use crate::shadow_desktop::{capture, desktop, input, launch, windows, SHADOW_DESKTOP};
 
 /// Printed on every run: when a report says "it failed", this says which binary produced
 /// it, so an old copy on disk cannot be mistaken for a new one.
-const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10e (focus + posted text)";
+const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10f (classic edit target)";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     println!("{BUILD_STAMP}");
@@ -29,6 +30,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "key" => key_cmd(rest),
         "focus" => focus_cmd(rest),
         "type" => type_cmd(rest),
+        "target" => target_cmd(rest),
         "demo" => demo(rest),
         "help" | "-h" | "--help" => {
             println!("{}", usage());
@@ -52,6 +54,7 @@ hvnc-probe <command> [args]
   key     <desktop> <vk> [down|up]         virtual key, hex - 0D is Enter
   focus   <desktop> [hwnd]                 bring a window of that desktop to the front
   type    <desktop> <text> [hwnd]          post characters to a window there
+  target  <desktop>                        open a plain text target on that desktop
   demo    [program] [args...]              create + launch + capture, then hold open
 
 Run `create` in one terminal and drive it from another: a desktop is destroyed as
@@ -109,6 +112,11 @@ fn type_cmd(rest: &[String]) -> Result<(), String> {
     let text = arg(rest, 1, "<text>")?;
     println!("{}", input::type_text(name, parse_hwnd(rest.get(2))?, text)?);
     Ok(())
+}
+
+fn target_cmd(rest: &[String]) -> Result<(), String> {
+    let name = arg(rest, 0, "<desktop>")?;
+    target::run(name)
 }
 
 /// Window handles are printed as hex, so accept them that way too.

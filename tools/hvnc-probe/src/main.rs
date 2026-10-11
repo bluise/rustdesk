@@ -20,6 +20,8 @@ compile_error!("hvnc-probe only builds on Windows: it drives CreateDesktopW / Bi
 mod app;
 #[cfg(windows)]
 mod bmp;
+#[cfg(windows)]
+mod target;
 
 // The gating below copies the line in src/lib.rs on purpose: this probe must compile the
 // module under exactly the conditions the crate does.
