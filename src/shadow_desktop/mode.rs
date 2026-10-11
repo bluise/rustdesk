@@ -12,6 +12,7 @@
 //! The session also owns the desktop handle, which is what keeps the desktop - and the
 //! program started on it - alive.
 
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use super::desktop::Desktop;
@@ -149,4 +150,30 @@ pub fn set_focus(hwnd: Option<isize>) {
 /// The pid of the program started on the shadow desktop, if it came up.
 pub fn program_pid() -> Option<u32> {
     with(|s| s.program_pid).flatten()
+}
+
+/// Which screen each connection is looking at, so input can be routed to where the
+/// operator's eyes are.
+///
+/// The video side knows this when it picks a capturer; it only has to say so. Until it says
+/// anything, a connection is assumed to be on the hidden desktop, which is the screen listed
+/// first and therefore the one a client lands on by default.
+static VIEWING_SHADOW: OnceLock<Mutex<HashMap<i32, bool>>> = OnceLock::new();
+
+fn viewing_shadow() -> &'static Mutex<HashMap<i32, bool>> {
+    VIEWING_SHADOW.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn set_viewing_shadow(conn: i32, shadow: bool) {
+    if let Ok(mut map) = viewing_shadow().lock() {
+        map.insert(conn, shadow);
+    }
+}
+
+pub fn is_viewing_shadow(conn: i32) -> bool {
+    viewing_shadow()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&conn).copied())
+        .unwrap_or(true)
 }
