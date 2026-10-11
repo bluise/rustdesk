@@ -10,7 +10,7 @@ use crate::shadow_desktop::{capture, desktop, input, launch, windows, SHADOW_DES
 
 /// Printed on every run: when a report says "it failed", this says which binary produced
 /// it, so an old copy on disk cannot be mistaken for a new one.
-const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10d (capture method diagnosis)";
+const BUILD_STAMP: &str = "hvnc-probe 0.1.0 / module 2026-10-10e (focus + posted text)";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     println!("{BUILD_STAMP}");
@@ -27,6 +27,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "click" => click_cmd(rest),
         "move" => move_cmd(rest),
         "key" => key_cmd(rest),
+        "focus" => focus_cmd(rest),
+        "type" => type_cmd(rest),
         "demo" => demo(rest),
         "help" | "-h" | "--help" => {
             println!("{}", usage());
@@ -48,6 +50,8 @@ hvnc-probe <command> [args]
   click   <desktop> <x> <y>                left click at x,y on that desktop
   move    <desktop> <x> <y>                move the pointer there
   key     <desktop> <vk> [down|up]         virtual key, hex - 0D is Enter
+  focus   <desktop> [hwnd]                 bring a window of that desktop to the front
+  type    <desktop> <text> [hwnd]          post characters to a window there
   demo    [program] [args...]              create + launch + capture, then hold open
 
 Run `create` in one terminal and drive it from another: a desktop is destroyed as
@@ -92,6 +96,32 @@ fn capture_cmd(rest: &[String]) -> Result<(), String> {
         println!("{path}  {}x{}", frame.width, frame.height);
     }
     Ok(())
+}
+
+fn focus_cmd(rest: &[String]) -> Result<(), String> {
+    let name = arg(rest, 0, "<desktop>")?;
+    println!("{}", input::focus_window(name, parse_hwnd(rest.get(1))?)?);
+    Ok(())
+}
+
+fn type_cmd(rest: &[String]) -> Result<(), String> {
+    let name = arg(rest, 0, "<desktop>")?;
+    let text = arg(rest, 1, "<text>")?;
+    println!("{}", input::type_text(name, parse_hwnd(rest.get(2))?, text)?);
+    Ok(())
+}
+
+/// Window handles are printed as hex, so accept them that way too.
+fn parse_hwnd(raw: Option<&String>) -> Result<Option<isize>, String> {
+    match raw {
+        None => Ok(None),
+        Some(raw) => {
+            let trimmed = raw.trim().trim_start_matches("0x");
+            isize::from_str_radix(trimmed, 16)
+                .map(Some)
+                .map_err(|e| format!("bad hwnd {raw:?}: {e}"))
+        }
+    }
 }
 
 fn diag_cmd(rest: &[String]) -> Result<(), String> {

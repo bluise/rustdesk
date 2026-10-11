@@ -11,14 +11,18 @@
 use std::mem::{size_of, zeroed};
 use std::thread;
 use std::time::Duration;
-use winapi::shared::minwindef::UINT;
+use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
+use winapi::shared::windef::HWND;
 use winapi::um::winuser::{
-    GetSystemMetrics, SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, INPUT_u, KEYBDINPUT,
-    KEYEVENTF_KEYUP, LPINPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-    MOUSEEVENTF_MOVE, MOUSEINPUT, SM_CXSCREEN, SM_CYSCREEN,
+    BringWindowToTop, EnumWindows, GetForegroundWindow, GetSystemMetrics, GetWindowTextW,
+    IsWindowVisible, PostMessageW, SendInput, SetFocus, SetForegroundWindow, INPUT, INPUT_KEYBOARD,
+    INPUT_MOUSE, INPUT_u, KEYBDINPUT, KEYEVENTF_KEYUP, LPINPUT, MOUSEEVENTF_ABSOLUTE,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, SM_CXSCREEN,
+    SM_CYSCREEN, WM_CHAR,
 };
 
 use super::desktop::AttachedDesktop;
+use super::last_error;
 
 /// Marks our own events, the way enigo tags its input: the peer-side hook can then tell
 /// injected input from a real user, which is what privacy mode does.
@@ -129,4 +133,114 @@ fn push(input: INPUT) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Puts a window of the hidden desktop in front and gives it focus.
+///
+/// A hidden desktop has no foreground window of its own, so injected input has nothing to
+/// land on: SendInput reports success and the keystroke goes nowhere. This is what gives
+/// it a receiver.
+pub fn focus_window(desktop: &str, hwnd: Option<isize>) -> Result<String, String> {
+    let desktop = desktop.to_owned();
+    thread::spawn(move || focus_on_thread(&desktop, hwnd))
+        .join()
+        .map_err(|_| "input thread panicked".to_owned())?
+}
+
+fn focus_on_thread(desktop: &str, hwnd: Option<isize>) -> Result<String, String> {
+    let _attached = AttachedDesktop::attach(desktop)?;
+    let (target, label) = pick_target(hwnd)?;
+    let mut notes = vec![format!("target {label}")];
+    unsafe {
+        notes.push(format!(
+            "foreground before: {:#x}",
+            GetForegroundWindow() as usize
+        ));
+        if SetForegroundWindow(target) == FALSE {
+            notes.push(format!("SetForegroundWindow failed: {}", last_error()));
+        } else {
+            notes.push("SetForegroundWindow ok".to_owned());
+        }
+        if BringWindowToTop(target) == FALSE {
+            notes.push(format!("BringWindowToTop failed: {}", last_error()));
+        } else {
+            notes.push("BringWindowToTop ok".to_owned());
+        }
+        if SetFocus(target).is_null() {
+            notes.push(format!("SetFocus failed: {}", last_error()));
+        } else {
+            notes.push("SetFocus ok".to_owned());
+        }
+        notes.push(format!(
+            "foreground after: {:#x}",
+            GetForegroundWindow() as usize
+        ));
+    }
+    Ok(notes.join("; "))
+}
+
+/// Types into a window of the hidden desktop by posting the characters to it.
+///
+/// Posting does not need the window to hold focus, which makes it the dependable path
+/// while focus handling on a hidden desktop is still being worked out.
+pub fn type_text(desktop: &str, hwnd: Option<isize>, text: &str) -> Result<String, String> {
+    let desktop = desktop.to_owned();
+    let text = text.to_owned();
+    thread::spawn(move || type_on_thread(&desktop, hwnd, &text))
+        .join()
+        .map_err(|_| "input thread panicked".to_owned())?
+}
+
+fn type_on_thread(desktop: &str, hwnd: Option<isize>, text: &str) -> Result<String, String> {
+    let _attached = AttachedDesktop::attach(desktop)?;
+    let (target, label) = pick_target(hwnd)?;
+    let mut sent = 0usize;
+    for ch in text.chars() {
+        unsafe {
+            if PostMessageW(target, WM_CHAR, ch as usize, 0) != FALSE {
+                sent += 1;
+            }
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+    Ok(format!(
+        "posted {sent}/{} characters to {label}",
+        text.chars().count()
+    ))
+}
+
+/// The window a command should act on: the one it was given, or the first visible window
+/// with a title on this desktop.
+fn pick_target(hwnd: Option<isize>) -> Result<(HWND, String), String> {
+    if let Some(handle) = hwnd.filter(|h| *h != 0) {
+        return Ok((handle as HWND, format!("{handle:#x}")));
+    }
+    unsafe {
+        let mut found: Option<(HWND, String)> = None;
+        EnumWindows(
+            Some(first_titled),
+            &mut found as *mut Option<(HWND, String)> as LPARAM,
+        );
+        match found {
+            Some((handle, title)) => Ok((handle, format!("{:#x} {title:?}", handle as usize))),
+            None => Err("no visible window with a title on this desktop".to_owned()),
+        }
+    }
+}
+
+unsafe extern "system" fn first_titled(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let slot = &mut *(lparam as *mut Option<(HWND, String)>);
+    if slot.is_some() {
+        return FALSE;
+    }
+    if IsWindowVisible(hwnd) == FALSE {
+        return TRUE;
+    }
+    let mut buf = [0u16; 256];
+    let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+    if len <= 0 {
+        return TRUE;
+    }
+    *slot = Some((hwnd, String::from_utf16_lossy(&buf[..len as usize])));
+    FALSE
 }
