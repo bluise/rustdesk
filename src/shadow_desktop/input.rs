@@ -12,13 +12,14 @@ use std::mem::{size_of, zeroed};
 use std::thread;
 use std::time::Duration;
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
-use winapi::shared::windef::HWND;
+use winapi::shared::windef::{HWND, POINT, RECT};
 use winapi::um::winuser::{
-    BringWindowToTop, EnumWindows, GetForegroundWindow, GetSystemMetrics, GetWindowTextW,
-    IsWindowVisible, PostMessageW, SendInput, SetFocus, SetForegroundWindow, INPUT, INPUT_KEYBOARD,
-    INPUT_MOUSE, INPUT_u, KEYBDINPUT, KEYEVENTF_KEYUP, LPINPUT, MOUSEEVENTF_ABSOLUTE,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, SM_CXSCREEN,
-    SM_CYSCREEN, WM_CHAR,
+    BringWindowToTop, ClientToScreen, EnumWindows, GetClientRect, GetForegroundWindow,
+    GetSystemMetrics, GetWindowTextW, IsWindowVisible, PostMessageW, RealChildWindowFromPoint,
+    ScreenToClient, SendInput, SetFocus, SetForegroundWindow, WindowFromPoint, INPUT,
+    INPUT_KEYBOARD, INPUT_MOUSE, INPUT_u, KEYBDINPUT, KEYEVENTF_KEYUP, LPINPUT,
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT,
+    SM_CXSCREEN, SM_CYSCREEN, WM_CHAR,
 };
 
 use super::desktop::AttachedDesktop;
@@ -209,8 +210,11 @@ fn type_on_thread(desktop: &str, hwnd: Option<isize>, text: &str) -> Result<Stri
     ))
 }
 
-/// The window a command should act on: the one it was given, or the first visible window
-/// with a title on this desktop.
+/// The window a command should act on: the one it was given, or the control under the
+/// centre of the first visible titled window.
+///
+/// The frame is not the receiver - a text box or a canvas is, and it is a child of the
+/// frame. Aiming at the frame is why a posted character can be accepted and then ignored.
 fn pick_target(hwnd: Option<isize>) -> Result<(HWND, String), String> {
     if let Some(handle) = hwnd.filter(|h| *h != 0) {
         return Ok((handle as HWND, format!("{handle:#x}")));
@@ -222,9 +226,43 @@ fn pick_target(hwnd: Option<isize>) -> Result<(HWND, String), String> {
             &mut found as *mut Option<(HWND, String)> as LPARAM,
         );
         match found {
-            Some((handle, title)) => Ok((handle, format!("{:#x} {title:?}", handle as usize))),
+            Some((frame, title)) => {
+                let target = deepest_child_at(frame);
+                let suffix = if target == frame { "" } else { " (child control)" };
+                Ok((target, format!("{:#x} {title:?}{suffix}", target as usize)))
+            }
             None => Err("no visible window with a title on this desktop".to_owned()),
         }
+    }
+}
+
+/// Walks into the window under the centre of `frame`, the way a click would land.
+unsafe fn deepest_child_at(frame: HWND) -> HWND {
+    let mut client: RECT = zeroed();
+    if GetClientRect(frame, &mut client) == FALSE {
+        return frame;
+    }
+    let mut point = POINT {
+        x: (client.left + client.right) / 2,
+        y: (client.top + client.bottom) / 2,
+    };
+    if ClientToScreen(frame, &mut point) == FALSE {
+        return frame;
+    }
+    let mut current = WindowFromPoint(point);
+    if current.is_null() {
+        return frame;
+    }
+    loop {
+        let mut local = point;
+        if ScreenToClient(current, &mut local) == FALSE {
+            return current;
+        }
+        let child = RealChildWindowFromPoint(current, local);
+        if child.is_null() || child == current {
+            return current;
+        }
+        current = child;
     }
 }
 
