@@ -1,0 +1,7 @@
+hvnc-probe 0.1.0 / module 2026-10-10d (capture method diagnosis)
+capture methods on RustDeskShadow:
+  printwindow-per-window     OK    1920x1080 frame with content
+      wrote diag-printwindow-per-window.bmp
+  getdc+bitblt+captureblt    FAIL  BitBlt failed: error 5 (0x00000005)
+  getdc+bitblt               FAIL  BitBlt failed: error 6 (0x00000006)
+  createdc-DISPLAY+bitblt    FAIL  BitBlt failed: error 6 (0x00000006)
