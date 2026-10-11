@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::desktop::Desktop;
-use super::{launch, SHADOW_DESKTOP};
+use super::{launch, windows, SHADOW_DESKTOP};
 
 /// Started when the mode comes up: a desktop with nothing on it cannot be worked with.
 pub const DEFAULT_PROGRAM: &str = "explorer.exe";
@@ -83,12 +83,23 @@ pub fn enable(program: Option<&str>, fps: u32, frame_size: Option<FrameSize>) ->
     // and it has to keep sitting there.
     super::desktop::ensure_process_in_interactive_winsta()?;
     let desktop = Desktop::create_or_open(SHADOW_DESKTOP)?;
-    let pid = match launch::spawn_on_desktop(&desktop.qualified_name(), program.unwrap_or(DEFAULT_PROGRAM), &[]) {
-        Ok(pid) => Some(pid),
-        Err(e) => {
-            // The desktop is still usable by hand, so this is not fatal.
-            eprintln!("[shadow_desktop] could not start the program: {e}");
-            None
+    let pid = if explorer_running_on(&desktop) {
+        // A daemon restart would otherwise launch another explorer onto a desktop that
+        // keeps every window, so the user ends up with several "This PC" windows.
+        eprintln!("[shadow_desktop] explorer is already on the desktop, not starting another");
+        None
+    } else {
+        let program = program.unwrap_or(DEFAULT_PROGRAM);
+        match launch::spawn_on_desktop(&desktop.qualified_name(), program, &[]) {
+            Ok(pid) => {
+                eprintln!("[shadow_desktop] started {program} on the desktop");
+                Some(pid)
+            }
+            Err(e) => {
+                // The desktop is still usable by hand, so this is not fatal.
+                eprintln!("[shadow_desktop] could not start the program: {e}");
+                None
+            }
         }
     };
 
@@ -102,6 +113,25 @@ pub fn enable(program: Option<&str>, fps: u32, frame_size: Option<FrameSize>) ->
         size: super::capture::desktop_size(None)?,
     });
     Ok(())
+}
+
+/// Whether Windows Explorer already has a window on this desktop.
+///
+/// The desktop and its windows outlive a restart of the daemon, so starting the program
+/// again without asking first stacks a second explorer - and a third - on top.
+fn explorer_running_on(desktop: &Desktop) -> bool {
+    const EXPLORER_CLASSES: [&str; 2] = ["CabinetWClass", "ExploreWClass"];
+    match windows::list(&desktop.qualified_name()) {
+        Ok(list) => list
+            .iter()
+            .any(|w| EXPLORER_CLASSES.iter().any(|c| w.class.eq_ignore_ascii_case(c))),
+        Err(e) => {
+            // A listing that failed is not proof there is none, so start the program the
+            // way this did before the check existed.
+            eprintln!("[shadow_desktop] could not list the desktop's windows: {e}");
+            false
+        }
+    }
 }
 
 /// Turns the mode off. Dropping the desktop handle destroys the desktop, which takes the

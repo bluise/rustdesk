@@ -1568,13 +1568,17 @@ pub mod client {
                 return true;
             }
             let event = evt.mask & MOUSE_TYPE_MASK;
+            // Only a move carries a position. A relative move arrives as a delta and is
+            // accumulated onto the remembered point; an absolute one carries the point
+            // directly. Button and wheel events carry neither - their x/y are zero - so
+            // they keep the point already there instead of posting to the desktop root.
             let point = if event == MOUSE_TYPE_MOVE_RELATIVE {
                 // The protocol only carries the movement here; the desktop has no real cursor
                 // to move, so the position is accumulated.
                 let (width, height) = mode::desktop_size().unwrap_or((1920, 1080));
                 mode::move_cursor_by(evt.x, evt.y, width, height)
             } else {
-                mode::set_cursor((evt.x, evt.y))
+                Some((evt.x, evt.y))
             };
             let Some((x, y)) = point else {
                 return true;

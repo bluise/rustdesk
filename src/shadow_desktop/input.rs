@@ -305,6 +305,17 @@ fn mouse_at_on_thread(
     y: i32,
     action: MouseAction,
 ) -> Result<String, String> {
+    // A move carries its position and becomes the point later events act on. Button and
+    // wheel events carry none - the protocol leaves their x/y zero - so they act on that
+    // remembered point; posting them at the point they arrived with sent every click to
+    // the window at (0,0), the desktop root.
+    let (x, y) = match action {
+        MouseAction::Move => {
+            super::mode::set_cursor((x, y));
+            (x, y)
+        }
+        _ => super::mode::cursor().unwrap_or((x, y)),
+    };
     let _attached = AttachedDesktop::attach(desktop)?;
     unsafe {
         let hwnd = deepest_at(POINT { x, y });
