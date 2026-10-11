@@ -15,6 +15,8 @@
 
 use std::mem::{size_of, zeroed};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
@@ -376,6 +378,128 @@ fn is_black(frame: &Frame) -> bool {
         .chunks_exact(4)
         .step_by(97)
         .all(|p| p[0] < 8 && p[1] < 8 && p[2] < 8)
+}
+
+/// A running producer of shadow-desktop frames.
+///
+/// The worker thread is attached to the desktop once and stays there: `SetThreadDesktop`
+/// cannot be undone, and `PrintWindow` only reads that desktop from a thread which is on it.
+/// Frames are pushed through a two-slot channel, so a consumer that falls behind makes the
+/// worker drop frames instead of piling them up.
+pub struct Worker {
+    pub width: usize,
+    pub height: usize,
+    frames: mpsc::Receiver<Vec<u8>>,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    /// The next frame, or `None` if none arrived within `timeout`.
+    pub fn next_frame(&mut self, timeout: Duration) -> Option<Vec<u8>> {
+        self.frames.recv_timeout(timeout).ok()
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // The join is quick: the loop sleeps in short steps and checks the flag.
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Starts producing frames of `desktop`, at most `fps` per second, scaled to `size`
+/// (the desktop's own size when `None`).
+pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result<Worker, String> {
+    let desktop = desktop.to_owned();
+    let (width, height) = desktop_size(None)?;
+    let (out_width, out_height) = size.unwrap_or((width, height));
+    let (sender, frames) = mpsc::sync_channel(2);
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = stop.clone();
+
+    let handle = thread::spawn(move || {
+        // Held for the life of the thread; the desktop itself is kept alive by the session.
+        let _attached = match AttachedDesktop::attach(&desktop) {
+            Ok(attached) => attached,
+            Err(e) => {
+                eprintln!("[shadow_desktop] capture thread could not attach: {e}");
+                return;
+            }
+        };
+        let delay = Duration::from_millis((1000 / fps.max(1)) as u64);
+        let mut failed = 0u32;
+        while !worker_stop.load(Ordering::SeqCst) {
+            match print_window_frame(width, height) {
+                Ok(frame) => {
+                    let data = if (out_width, out_height) == (width, height) {
+                        frame.bgra
+                    } else {
+                        scale_down(&frame, out_width, out_height)
+                    };
+                    // A full channel means the consumer is behind: drop this frame.
+                    let _ = sender.try_send(data);
+                }
+                Err(e) => {
+                    failed += 1;
+                    if failed <= 3 {
+                        eprintln!("[shadow_desktop] capture failed: {e}");
+                    }
+                }
+            }
+            // Short steps so the stop flag is noticed promptly.
+            let mut slept = Duration::ZERO;
+            while slept < delay && !worker_stop.load(Ordering::SeqCst) {
+                let step = Duration::from_millis(20).min(delay - slept);
+                thread::sleep(step);
+                slept += step;
+            }
+        }
+    });
+
+    Ok(Worker {
+        width: out_width as usize,
+        height: out_height as usize,
+        frames,
+        stop,
+        handle: Some(handle),
+    })
+}
+
+/// A plain box filter: every output pixel averages the source block it covers. Good enough
+/// for scaling a desktop down, and it keeps the module free of image dependencies.
+fn scale_down(frame: &Frame, width: i32, height: i32) -> Vec<u8> {
+    let (src_w, src_h) = (frame.width as i32, frame.height as i32);
+    let (out_w, out_h) = (width.max(1), height.max(1));
+    let mut out = vec![0u8; out_w as usize * out_h as usize * 4];
+    for y in 0..out_h {
+        let y0 = (y as i64 * src_h as i64) / out_h as i64;
+        let y1 = (((y + 1) as i64 * src_h as i64) / out_h as i64).max(y0 + 1);
+        for x in 0..out_w {
+            let x0 = (x as i64 * src_w as i64) / out_w as i64;
+            let x1 = (((x + 1) as i64 * src_w as i64) / out_w as i64).max(x0 + 1);
+            let (mut b, mut g, mut r, mut count) = (0u32, 0u32, 0u32, 0u32);
+            for sy in y0..y1.min(src_h as i64) {
+                for sx in x0..x1.min(src_w as i64) {
+                    let at = ((sy * src_w as i64 + sx) * 4) as usize;
+                    b += frame.bgra[at] as u32;
+                    g += frame.bgra[at + 1] as u32;
+                    r += frame.bgra[at + 2] as u32;
+                    count += 1;
+                }
+            }
+            let count = count.max(1);
+            let at = ((y as usize * out_w as usize) + x as usize) * 4;
+            out[at] = (b / count) as u8;
+            out[at + 1] = (g / count) as u8;
+            out[at + 2] = (r / count) as u8;
+            out[at + 3] = 255;
+        }
+    }
+    out
 }
 
 fn read_frame(dc: HDC, bmp: HBITMAP, width: i32, height: i32) -> Result<Frame, String> {
