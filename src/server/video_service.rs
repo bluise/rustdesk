@@ -317,6 +317,75 @@ pub fn new(source: VideoSource, idx: usize) -> GenericService {
     vs.sp
 }
 
+/// The shadow desktop's frames, wrapped so the video pipeline can consume them like any
+/// other capturer.
+///
+/// Thin on purpose: the desktop is read by `shadow_desktop`'s own worker thread, which is
+/// attached to that desktop and knows nothing about scrap. Keeping the scrap-facing part
+/// here leaves the module free of scrap, which is what keeps it compile-checked by
+/// tools/hvnc-probe.
+#[cfg(all(windows, feature = "shadow-desktop"))]
+mod shadow_capturer {
+    use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+
+    use crate::shadow_desktop::{capture, mode, SHADOW_DESKTOP, SHADOW_DISPLAY_NAME};
+
+    pub const DISPLAY_NAME: &str = SHADOW_DISPLAY_NAME;
+
+    pub struct ShadowCapturer {
+        worker: capture::Worker,
+        /// A frame is handed out by reference, so it has to live next to the capturer.
+        buffer: Vec<u8>,
+    }
+
+    impl ShadowCapturer {
+        pub fn new() -> std::io::Result<Self> {
+            let size = mode::frame_size().map(|size| (size.width, size.height));
+            let worker = capture::spawn_worker(SHADOW_DESKTOP, mode::fps(), size)
+                .map_err(|e| Error::new(ErrorKind::Other, e))?;
+            Ok(Self {
+                worker,
+                buffer: Vec::new(),
+            })
+        }
+    }
+
+    impl scrap::TraitCapturer for ShadowCapturer {
+        fn frame<'a>(&'a mut self, timeout: Duration) -> std::io::Result<scrap::Frame<'a>> {
+            match self.worker.next_frame(timeout) {
+                Some(frame) => {
+                    self.buffer = frame;
+                    Ok(scrap::Frame::PixelBuffer(scrap::PixelBuffer::with_BGRA(
+                        &self.buffer,
+                        self.worker.width,
+                        self.worker.height,
+                    )))
+                }
+                // The video pipeline already reads this as "nothing new yet".
+                None => Err(Error::new(ErrorKind::TimedOut, "no shadow frame")),
+            }
+        }
+
+        fn is_gdi(&self) -> bool {
+            // PrintWindow is a software path, which is what the pipeline reads this flag for.
+            true
+        }
+
+        fn set_gdi(&mut self) -> bool {
+            true
+        }
+
+        #[cfg(feature = "vram")]
+        fn device(&self) -> scrap::AdapterDevice {
+            Default::default()
+        }
+
+        #[cfg(feature = "vram")]
+        fn set_output_texture(&mut self, _texture: bool) {}
+    }
+}
+
 // Capturer object is expensive, avoiding to create it frequently.
 fn create_capturer(
     privacy_mode_id: i32,
@@ -324,6 +393,15 @@ fn create_capturer(
     _current: usize,
     _portable_service_running: bool,
 ) -> ResultType<Box<dyn TraitCapturer>> {
+    // The shadow desktop is not a monitor: it is fed by the module, and only while the mode
+    // is on (and only for its own entry in the display list - the real screens keep using
+    // the platform capturer exactly as before).
+    #[cfg(all(windows, feature = "shadow-desktop"))]
+    if crate::shadow_desktop::mode::is_active() && display.name() == shadow_capturer::DISPLAY_NAME
+    {
+        return Ok(Box::new(shadow_capturer::ShadowCapturer::new()?));
+    }
+
     #[cfg(not(windows))]
     let c: Option<Box<dyn TraitCapturer>> = None;
     #[cfg(windows)]

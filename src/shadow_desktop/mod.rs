@@ -27,6 +27,11 @@ pub mod windows;
 /// The desktop everything in this mode runs on.
 pub const SHADOW_DESKTOP: &str = "RustDeskShadow";
 
+/// What the shadow desktop is called in the display list the client sees. It mimics the
+/// device-name form (`\\.\DISPLAY1`) so it cannot be confused with a real monitor, and the
+/// capture path uses it to tell the two apart.
+pub const SHADOW_DISPLAY_NAME: &str = "\\\\.\\RUSTDESK-SHADOW";
+
 /// NUL-terminated UTF-16, the form every `*W` API here expects.
 pub(crate) fn wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
     let mut v: Vec<u16> = s.as_ref().encode_wide().collect();
