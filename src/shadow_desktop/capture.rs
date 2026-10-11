@@ -18,7 +18,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
 use winapi::shared::windef::{HBITMAP, HDC, HWND, RECT};
 use winapi::um::wingdi::{
@@ -27,8 +27,8 @@ use winapi::um::wingdi::{
     SRCCOPY,
 };
 use winapi::um::winuser::{
-    EnumWindows, GetDC, GetSystemMetrics, GetWindowRect, IsWindowVisible, PrintWindow, ReleaseDC,
-    SM_CXSCREEN, SM_CYSCREEN,
+    EnumWindows, GetClassNameW, GetDC, GetSystemMetrics, GetWindowRect, IsWindowVisible,
+    PrintWindow, ReleaseDC, SM_CXSCREEN, SM_CYSCREEN,
 };
 
 use super::desktop::AttachedDesktop;
@@ -311,10 +311,34 @@ fn print_window_frame(width: i32, height: i32) -> Result<Frame, String> {
     }
 }
 
+/// Shell windows whose `PrintWindow` can block forever: the desktop and taskbar windows
+/// (`Progman`, `WorkerW`, the two tray windows) never return, and the composition bridge only
+/// draws the wallpaper behind the real content. `PrintWindow` has no timeout, so one of these
+/// left the capture thread parked for good - no frame and no error.
+fn is_blocking_class(hwnd: HWND) -> bool {
+    const BLOCKING: [&str; 5] = [
+        "Progman",
+        "WorkerW",
+        "Shell_TrayWnd",
+        "Shell_SecondaryTrayWnd",
+        "Windows.UI.Composition.DesktopWindowContentBridge",
+    ];
+    let mut buf = [0u16; 256];
+    let len = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+    if len <= 0 {
+        return false;
+    }
+    let class = String::from_utf16_lossy(&buf[..len as usize]);
+    BLOCKING.iter().any(|b| class.eq_ignore_ascii_case(b))
+}
+
 /// Collects visible windows with their rectangles, in the Z-order EnumWindows gives.
 unsafe extern "system" fn collect_visible(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let windows = &mut *(lparam as *mut Vec<(HWND, RECT)>);
     if IsWindowVisible(hwnd) == FALSE {
+        return TRUE;
+    }
+    if is_blocking_class(hwnd) {
         return TRUE;
     }
     let mut rect: RECT = zeroed();
@@ -396,6 +420,9 @@ pub struct Worker {
     /// its own - keeping it dependency-free is what lets the probe compile-check it - so a
     /// worker that keeps failing would otherwise fail silently.
     last_error: Arc<Mutex<Option<String>>>,
+    /// When the newest frame was produced. A stalled `PrintWindow` never returns, so it never
+    /// sets `last_error` either; this age is what tells a caller the worker is stuck.
+    last_frame: Arc<Mutex<Instant>>,
 }
 
 impl Worker {
@@ -406,6 +433,20 @@ impl Worker {
 
     pub fn last_error(&self) -> Option<String> {
         self.last_error.lock().ok().and_then(|e| e.clone())
+    }
+
+    /// The age of the newest frame; meaningful from construction, so a worker that never
+    /// produced one reports the time since it started.
+    pub fn since_last_frame(&self) -> Duration {
+        self.last_frame
+            .lock()
+            .map(|t| t.elapsed())
+            .unwrap_or_default()
+    }
+
+    /// The method this worker captures with, named when a caller reports a stall.
+    pub fn method(&self) -> Method {
+        Method::PrintWindow
     }
 }
 
@@ -430,6 +471,8 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
     let worker_stop = stop.clone();
     let last_error = Arc::new(Mutex::new(None));
     let worker_error = last_error.clone();
+    let last_frame = Arc::new(Mutex::new(Instant::now()));
+    let worker_last_frame = last_frame.clone();
     // The caller has to learn about a refusal to attach. Without this handshake the capturer
     // looks alive while producing nothing, which is exactly how the first machine test went:
     // a client waiting for a first frame that never came.
@@ -461,6 +504,9 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
                     };
                     if let Ok(mut slot) = worker_error.lock() {
                         *slot = None;
+                    }
+                    if let Ok(mut t) = worker_last_frame.lock() {
+                        *t = Instant::now();
                     }
                     // A full channel means the consumer is behind: drop this frame.
                     let _ = sender.try_send(data);
@@ -508,6 +554,7 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
         stop,
         handle: Some(handle),
         last_error,
+        last_frame,
     })
 }
 

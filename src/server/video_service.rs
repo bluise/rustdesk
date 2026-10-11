@@ -327,7 +327,7 @@ pub fn new(source: VideoSource, idx: usize) -> GenericService {
 #[cfg(all(windows, feature = "shadow-desktop"))]
 mod shadow_capturer {
     use std::io::{Error, ErrorKind};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     // The file's own `use` does not reach into a nested module, so this one asks for the
     // logger itself.
@@ -337,6 +337,10 @@ mod shadow_capturer {
 
     pub const DISPLAY_NAME: &str = SHADOW_DISPLAY_NAME;
 
+    /// A stalled worker is reported at most this often, so the log shows the age of the last
+    /// frame instead of filling up.
+    const STALL_WARN_INTERVAL: Duration = Duration::from_secs(5);
+
     pub struct ShadowCapturer {
         worker: capture::Worker,
         /// A frame is handed out by reference, so it has to live next to the capturer.
@@ -344,6 +348,8 @@ mod shadow_capturer {
         /// The last failure already logged, so a failing capture is reported once per distinct
         /// reason instead of once per frame.
         reported: Option<String>,
+        /// When the stall warning was last printed, to keep it to one line per few seconds.
+        last_stall_warn: Instant,
     }
 
     impl ShadowCapturer {
@@ -355,6 +361,7 @@ mod shadow_capturer {
                 worker,
                 buffer: Vec::new(),
                 reported: None,
+                last_stall_warn: Instant::now(),
             })
         }
     }
@@ -377,6 +384,16 @@ mod shadow_capturer {
                             log::warn!("shadow capture is failing: {e}");
                             self.reported = Some(e);
                         }
+                    }
+                    // A worker parked in PrintWindow sets no error, so without this the stall
+                    // is silent. The age of the newest frame is what makes it visible.
+                    if self.last_stall_warn.elapsed() >= STALL_WARN_INTERVAL {
+                        log::warn!(
+                            "shadow capturer produced no frame for {:.1}s (method {})",
+                            self.worker.since_last_frame().as_secs_f64(),
+                            self.worker.method().label()
+                        );
+                        self.last_stall_warn = Instant::now();
                     }
                     Err(Error::new(ErrorKind::TimedOut, "no shadow frame"))
                 }
