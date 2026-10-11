@@ -1551,7 +1551,7 @@ pub mod client {
         use base::message_proto::{key_event, KeyEvent, MouseEvent};
 
         use crate::shadow_desktop::{input, mode, SHADOW_DESKTOP};
-        use crate::{
+        use crate::common::input::{
             MOUSE_TYPE_DOWN, MOUSE_TYPE_MASK, MOUSE_TYPE_MOVE_RELATIVE, MOUSE_TYPE_UP,
             MOUSE_TYPE_WHEEL,
         };
@@ -1599,11 +1599,11 @@ pub mod client {
                     // The character is what a text control reads.
                     post(evt, 0, char::from_u32(*code));
                 }
-                Some(key_event::Union::ControlKey(ck)) => match control_key_vk(*ck) {
+                Some(key_event::Union::ControlKey(ck)) => match control_key_vk(ck.value()) {
                     Some(vk) => post(evt, vk, None),
                     None => {
                         if evt.down {
-                            eprintln!("[shadow_desktop] control key {ck} not mapped yet");
+                            eprintln!("[shadow_desktop] control key {ck:?} not mapped yet");
                         }
                     }
                 },
