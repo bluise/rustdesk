@@ -1603,8 +1603,10 @@ pub mod client {
                 MOUSE_TYPE_WHEEL => input::MouseAction::Wheel(evt.y),
                 _ => input::MouseAction::Move,
             };
-            // Debug on every event: "the hook never fired" and "the hook fired and the post
-            // went nowhere" look identical from the outside otherwise.
+            // Debug on every event: "the hook never fired" and "the hook fired and the
+            // event went nowhere" look identical from the outside otherwise. The note
+            // carries the desktop's own cursor position, which says which of the two it
+            // was.
             match input::send_mouse_at(SHADOW_DESKTOP, x, y, action) {
                 Ok(what) => log::debug!("shadow desktop mouse: {what}"),
                 Err(e) => log::warn!("shadow desktop mouse failed: {e}"),
