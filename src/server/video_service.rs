@@ -329,6 +329,10 @@ mod shadow_capturer {
     use std::io::{Error, ErrorKind};
     use std::time::Duration;
 
+    // The file's own `use` does not reach into a nested module, so this one asks for the
+    // logger itself.
+    use hbb_common::log;
+
     use crate::shadow_desktop::{capture, mode, SHADOW_DESKTOP, SHADOW_DISPLAY_NAME};
 
     pub const DISPLAY_NAME: &str = SHADOW_DISPLAY_NAME;
