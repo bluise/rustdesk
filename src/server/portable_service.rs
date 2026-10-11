@@ -1549,6 +1549,8 @@ pub mod client {
     #[cfg(all(windows, feature = "shadow-desktop"))]
     mod shadow_input {
         use base::message_proto::{key_event, KeyEvent, MouseEvent};
+        // A use in the enclosing module does not reach into a nested one.
+        use hbb_common::log;
 
         use crate::shadow_desktop::{input, mode, SHADOW_DESKTOP};
         use crate::common::input::{
@@ -1583,8 +1585,11 @@ pub mod client {
                 MOUSE_TYPE_WHEEL => input::MouseAction::Wheel(evt.y),
                 _ => input::MouseAction::Move,
             };
-            if let Err(e) = input::send_mouse_at(SHADOW_DESKTOP, x, y, action) {
-                eprintln!("[shadow_desktop] mouse: {e}");
+            // Debug on every event: "the hook never fired" and "the hook fired and the post
+            // went nowhere" look identical from the outside otherwise.
+            match input::send_mouse_at(SHADOW_DESKTOP, x, y, action) {
+                Ok(what) => log::debug!("shadow desktop mouse: {what}"),
+                Err(e) => log::warn!("shadow desktop mouse failed: {e}"),
             }
             true
         }
@@ -1603,7 +1608,7 @@ pub mod client {
                     Some(vk) => post(evt, vk, None),
                     None => {
                         if evt.down {
-                            eprintln!("[shadow_desktop] control key {ck:?} not mapped yet");
+                            log::warn!("shadow desktop control key {ck:?} is not mapped yet");
                         }
                     }
                 },
@@ -1611,7 +1616,7 @@ pub mod client {
                     // `chr` carries a platform scan code and `seq` a text sequence; neither is
                     // mapped yet, and saying so beats guessing.
                     if evt.down {
-                        eprintln!("[shadow_desktop] key not handled yet: {other:?}");
+                        log::warn!("shadow desktop key not handled yet: {other:?}");
                     }
                 }
             }
@@ -1625,8 +1630,9 @@ pub mod client {
         fn post(evt: &KeyEvent, vk: u16, ch: Option<char>) {
             // No window given: the module posts to the one a click last landed on, which is
             // what a hidden desktop has instead of a foreground window.
-            if let Err(e) = input::post_key(SHADOW_DESKTOP, None, vk, ch, evt.down) {
-                eprintln!("[shadow_desktop] key: {e}");
+            match input::post_key(SHADOW_DESKTOP, None, vk, ch, evt.down) {
+                Ok(what) => log::debug!("shadow desktop {what}"),
+                Err(e) => log::warn!("shadow desktop key failed: {e}"),
             }
         }
 
