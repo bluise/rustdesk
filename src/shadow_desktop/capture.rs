@@ -438,10 +438,7 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
     let handle = thread::spawn(move || {
         // Held for the life of the thread; the desktop itself is kept alive by the session.
         let _attached = match AttachedDesktop::attach(&desktop) {
-            Ok(attached) => {
-                let _ = ready_sender.try_send(Ok(()));
-                attached
-            }
+            Ok(attached) => attached,
             Err(e) => {
                 let _ = ready_sender.try_send(Err(format!("capture thread could not attach: {e}")));
                 return;
@@ -449,6 +446,11 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
         };
         let delay = Duration::from_millis((1000 / fps.max(1)) as u64);
         let mut failed = 0u32;
+        // Held until the first frame is in the channel: the video service waits only a
+        // fraction of a second for it, and compositing every window takes longer than that.
+        // Announcing readiness at attach time makes it give up and rebuild a capturer that
+        // misses again, which is the loop the first machine test showed.
+        let mut announcing = true;
         while !worker_stop.load(Ordering::SeqCst) {
             match print_window_frame(width, height) {
                 Ok(frame) => {
@@ -462,11 +464,21 @@ pub fn spawn_worker(desktop: &str, fps: u32, size: Option<(i32, i32)>) -> Result
                     }
                     // A full channel means the consumer is behind: drop this frame.
                     let _ = sender.try_send(data);
+                    if announcing {
+                        let _ = ready_sender.try_send(Ok(()));
+                        announcing = false;
+                    }
                 }
                 Err(e) => {
                     failed += 1;
                     if let Ok(mut slot) = worker_error.lock() {
                         *slot = Some(e.clone());
+                    }
+                    if announcing && failed >= 3 {
+                        // Never produced anything: better to fail loudly than to look alive.
+                        let _ = ready_sender.try_send(Err(format!("no first frame: {e}")));
+                        announcing = false;
+                        return;
                     }
                     if failed <= 3 {
                         eprintln!("[shadow_desktop] capture failed: {e}");
