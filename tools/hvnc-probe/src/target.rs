@@ -24,7 +24,7 @@ use winapi::um::winuser::{
     WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
 };
 
-use crate::shadow_desktop::{desktop::AttachedDesktop, last_error, wide};
+use crate::shadow_desktop::{desktop::AttachedDesktop, desktop::Desktop, last_error, wide};
 
 /// Shows the target and pumps messages until the operator presses Enter.
 pub fn run(desktop: &str) -> Result<(), String> {
@@ -35,6 +35,9 @@ pub fn run(desktop: &str) -> Result<(), String> {
 }
 
 fn run_on_thread(desktop: &str) -> Result<(), String> {
+    // Hold the desktop open for as long as the window lives: closing its last handle
+    // destroys the desktop and its windows with it.
+    let _keep_open = Desktop::create_or_open(crate::shadow_desktop::SHADOW_DESKTOP)?;
     // No windows on this thread before the switch: SetThreadDesktop refuses otherwise.
     let attached = AttachedDesktop::attach(desktop)?;
     unsafe {
