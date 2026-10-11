@@ -1,0 +1,14 @@
+hvnc-probe 0.1.0 / module 2026-10-10c (open-desktop bare name + attempt report)
+desktop ready: WinSta0\RustDeskShadow
+started notepad.exe (pid 11992) - nothing should have appeared on screen
+[shadow_desktop] BitBlt failed: error 5 (0x00000005)
+[shadow_desktop] BitBlt failed: error 5 (0x00000005)
+[shadow_desktop] BitBlt failed: error 5 (0x00000005)
+shadow-0.bmp  1920x1080
+shadow-1.bmp  1920x1080
+shadow-2.bmp  1920x1080
+open the bitmaps: they should show notepad.exe, which is not on screen.
+while this runs you can attach from another terminal, e.g.
+  hvnc-probe windows RustDeskShadow
+  hvnc-probe click RustDeskShadow 400 300
+press Enter to close the desktop (and {name}'s windows with it)... 
