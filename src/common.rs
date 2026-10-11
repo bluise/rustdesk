@@ -2447,6 +2447,23 @@ fn apply_forced_builtin_settings() {
         overwrite.insert("allow-hide-cm".to_string(), "Y".to_string());
         overwrite.insert("access-mode".to_string(), "full".to_string());
         drop(overwrite);
+    // Leave no plaintext copy of the preset server or its key in the config directory.
+    //
+    // RustDesk writes whichever server it settles on into RustDesk2.toml by itself, and the
+    // key follows the same road. The values set above are held in memory and are read before
+    // anything stored, so the stored copies are of no use - which is exactly why they should
+    // not be sitting in a readable file. `get_option` sees the memory copy, so this only
+    // reaches what is on disk.
+    for key in [
+        "custom-rendezvous-server",
+        "api-server",
+        "relay-server",
+        "key",
+    ] {
+        if !config::Config::get_option(key).is_empty() {
+            config::Config::set_option(key.to_owned(), String::new());
+        }
+    }
         // Only the windowless daemon keeps the permanent password locked down.
         #[cfg(feature = "headless")]
         {

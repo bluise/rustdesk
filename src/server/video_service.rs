@@ -537,6 +537,9 @@ fn get_capturer_monitor(
     }
 
     let mut displays = Display::all()?;
+    // The capture path has to see the same list the client was offered, or it captures a real
+    // screen while input goes to the hidden desktop.
+    crate::server::display_service::add_shadow_display(&mut displays);
     let ndisplay = displays.len();
     if ndisplay <= current {
         bail!(
