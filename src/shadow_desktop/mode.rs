@@ -44,6 +44,8 @@ struct Session {
     focus: Option<isize>,
     fps: u32,
     frame_size: Option<FrameSize>,
+    /// The desktop's own size, which relative mouse movement is clamped to.
+    size: (i32, i32),
 }
 
 static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
@@ -97,6 +99,7 @@ pub fn enable(program: Option<&str>, fps: u32, frame_size: Option<FrameSize>) ->
         focus: None,
         fps: fps.max(1),
         frame_size,
+        size: super::capture::desktop_size()?,
     });
     Ok(())
 }
@@ -120,6 +123,11 @@ pub fn frame_size() -> Option<FrameSize> {
 
 pub fn cursor() -> Option<(i32, i32)> {
     with(|s| s.cursor)
+}
+
+/// The desktop's own size, for clamping relative movement.
+pub fn desktop_size() -> Option<(i32, i32)> {
+    with(|s| s.size)
 }
 
 /// Moves the tracked pointer, clamped to the desktop so it cannot wander off.

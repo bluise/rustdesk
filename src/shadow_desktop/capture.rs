@@ -179,7 +179,7 @@ fn diagnose_on_thread(desktop: &str, size: Option<(i32, i32)>) -> Result<Vec<Met
     Ok(reports)
 }
 
-fn desktop_size(size: Option<(i32, i32)>) -> Result<(i32, i32), String> {
+pub(crate) fn desktop_size(size: Option<(i32, i32)>) -> Result<(i32, i32), String> {
     let (width, height) =
         size.unwrap_or(unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) });
     if width <= 0 || height <= 0 {
