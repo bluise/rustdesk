@@ -948,6 +948,35 @@ pub struct Display {
 // https://github.com/bryal/dxgcap-rs/blob/master/src/lib.rs
 
 impl Display {
+    /// A screen with a name and a size, but no monitor behind it.
+    ///
+    /// Used for a virtual screen the host serves from somewhere other than the platform
+    /// capturer (the windowless daemon's hidden desktop): only the name and the geometry are
+    /// ever read, and `create_capturer` is expected to intercept it before any capturer is
+    /// built from it.
+    pub fn virtual_display(device_name: &str, width: i32, height: i32) -> Self {
+        let mut desc: DXGI_OUTPUT_DESC = unsafe { std::mem::zeroed() };
+        for (slot, unit) in desc
+            .DeviceName
+            .iter_mut()
+            .zip(device_name.encode_utf16().take(desc.DeviceName.len() - 1))
+        {
+            *slot = unit;
+        }
+        desc.DesktopCoordinates = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        Display {
+            inner: ComPtr(ptr::null_mut()),
+            adapter: ComPtr(ptr::null_mut()),
+            desc,
+            gdi: true,
+        }
+    }
+
     pub fn width(&self) -> LONG {
         self.desc.DesktopCoordinates.right - self.desc.DesktopCoordinates.left
     }

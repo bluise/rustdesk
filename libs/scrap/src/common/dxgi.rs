@@ -198,6 +198,16 @@ impl Display {
             .to_string()
     }
 
+    /// A screen with a name and a size, but no monitor behind it: for a virtual screen the
+    /// host serves from somewhere other than the platform capturer.
+    pub fn virtual_display(name: &str, width: usize, height: usize) -> Display {
+        Display(dxgi::Display::virtual_display(
+            name,
+            width as i32,
+            height as i32,
+        ))
+    }
+
     pub fn is_online(&self) -> bool {
         self.0.is_online()
     }

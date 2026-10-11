@@ -982,6 +982,26 @@ pub fn try_get_displays_add_amyuni_headless() -> ResultType<Vec<Display>> {
 pub fn try_get_displays_(add_amyuni_headless: bool) -> ResultType<Vec<Display>> {
     let mut displays = Display::all()?;
 
+    // The hidden desktop is listed first, so a client that has not picked anything lands on
+    // it; the real screens follow, so the operator can watch what the machine's own user is
+    // doing without being seen. `create_capturer` intercepts the shadow entry by name, so no
+    // platform capturer is ever built from it.
+    #[cfg(feature = "shadow-desktop")]
+    if crate::shadow_desktop::mode::is_active() {
+        let (width, height) = displays
+            .first()
+            .map(|d| (d.width(), d.height()))
+            .unwrap_or((1920, 1080));
+        displays.insert(
+            0,
+            scrap::Display::virtual_display(
+                crate::shadow_desktop::SHADOW_DISPLAY_NAME,
+                width,
+                height,
+            ),
+        );
+    }
+
     // Do not add virtual display if the platform is not installed or the virtual display is not supported.
     if !crate::platform::is_installed() || !virtual_display_manager::is_virtual_display_supported()
     {
