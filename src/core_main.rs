@@ -80,29 +80,22 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
-    // Brings the hidden desktop up before the server starts, when the setting asks for it.
-    // The setting exists only in a build that carries the mode, so an unset value means on -
-    // off would be the same as not shipping it at all.
+    // The display topology is put back here, in case a previous run was killed while the
+    // shadow desktop had the physical displays moved off screen. The mode itself comes up
+    // per connection, when the setting asks for it, rather than at boot: dark local screens
+    // for as long as the daemon runs would leave the machine unusable locally.
     #[cfg(all(windows, feature = "shadow-desktop"))]
     fn start_shadow_desktop() {
-        use base::config::keys::{
-            OPTION_SHADOW_DESKTOP, OPTION_SHADOW_DESKTOP_FPS, OPTION_SHADOW_DESKTOP_SIZE,
-        };
+        use base::config::keys::OPTION_SHADOW_DESKTOP;
         use hbb_common::config::Config;
 
-        use crate::shadow_desktop::{capture, mode};
+        use crate::shadow_desktop::mode;
 
+        mode::clear_after_crash();
         if !mode::wanted(&Config::get_option(OPTION_SHADOW_DESKTOP)) {
             log::info!("shadow desktop is turned off");
-            return;
-        }
-        let desktop = capture::desktop_size(None).unwrap_or((1920, 1080));
-        let fps = mode::parse_fps(&Config::get_option(OPTION_SHADOW_DESKTOP_FPS));
-        let size =
-            mode::parse_frame_size(&Config::get_option(OPTION_SHADOW_DESKTOP_SIZE), desktop);
-        match mode::enable(None, fps, size) {
-            Ok(()) => log::info!("shadow desktop is up, frames at {fps} fps"),
-            Err(e) => log::error!("shadow desktop could not start: {e}"),
+        } else if !mode::available() {
+            log::warn!("shadow desktop is on, but {}", mode::NOT_AVAILABLE);
         }
     }
 

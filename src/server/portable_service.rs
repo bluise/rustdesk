@@ -1540,148 +1540,6 @@ pub mod client {
         }
     }
 
-    /// Routing for the shadow desktop.
-    ///
-    /// While the operator is looking at the hidden screen, input goes window by window
-    /// instead of to the platform - the platform path cannot reach a desktop that is not on
-    /// screen. Everything here is inert unless the mode is on and that screen is the one on
-    /// view, so the ordinary path is untouched.
-    #[cfg(all(windows, feature = "shadow-desktop"))]
-    mod shadow_input {
-        use base::message_proto::{key_event, KeyEvent, MouseEvent};
-        // A use in the enclosing module does not reach into a nested one.
-        use hbb_common::log;
-
-        use crate::shadow_desktop::{input, mode, SHADOW_DESKTOP};
-        use crate::common::input::{
-            MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_WHEEL, MOUSE_TYPE_DOWN,
-            MOUSE_TYPE_MASK, MOUSE_TYPE_MOVE_RELATIVE, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL,
-        };
-
-        /// Returns true when the event was handled here and must not go on to the platform.
-        pub fn route_mouse(evt: &MouseEvent, simulate: bool) -> bool {
-            if !active() {
-                return false;
-            }
-            if !simulate {
-                // Nothing to inject, but it must not reach the platform either.
-                return true;
-            }
-            let event = evt.mask & MOUSE_TYPE_MASK;
-            // Only a move carries a position. A relative move arrives as a delta and is
-            // accumulated onto the remembered point; an absolute one carries the point
-            // directly. Button and wheel events carry neither - their x/y are zero - so
-            // they keep the point already there instead of posting to the desktop root.
-            let point = if event == MOUSE_TYPE_MOVE_RELATIVE {
-                // The protocol only carries the movement here; the desktop has no real cursor
-                // to move, so the position is accumulated.
-                let (width, height) = mode::desktop_size().unwrap_or((1920, 1080));
-                mode::move_cursor_by(evt.x, evt.y, width, height)
-            } else {
-                Some((evt.x, evt.y))
-            };
-            let Some((x, y)) = point else {
-                return true;
-            };
-            let action = match event {
-                // Which button is in the top bits of the mask; the event type alone says
-                // only that one of them moved. Reading it as "the left one" turned every
-                // right-click into a left one, and the desktop's context menu with it.
-                MOUSE_TYPE_DOWN | MOUSE_TYPE_UP => {
-                    let button = match evt.mask >> 3 {
-                        MOUSE_BUTTON_RIGHT => input::MouseButton::Right,
-                        MOUSE_BUTTON_WHEEL => input::MouseButton::Middle,
-                        MOUSE_BUTTON_LEFT => input::MouseButton::Left,
-                        _ => return true,
-                    };
-                    if event == MOUSE_TYPE_DOWN {
-                        input::MouseAction::Down(button)
-                    } else {
-                        input::MouseAction::Up(button)
-                    }
-                }
-                MOUSE_TYPE_WHEEL => input::MouseAction::Wheel(evt.y),
-                _ => input::MouseAction::Move,
-            };
-            // Debug on every event: "the hook never fired" and "the hook fired and the
-            // event went nowhere" look identical from the outside otherwise. The note
-            // carries the desktop's own cursor position, which says which of the two it
-            // was.
-            match input::send_mouse_at(SHADOW_DESKTOP, x, y, action) {
-                Ok(what) => log::debug!("shadow desktop mouse: {what}"),
-                Err(e) => log::warn!("shadow desktop mouse failed: {e}"),
-            }
-            true
-        }
-
-        /// Returns true when the event was handled here and must not go on to the platform.
-        pub fn route_key(evt: &KeyEvent) -> bool {
-            if !active() {
-                return false;
-            }
-            match &evt.union {
-                Some(key_event::Union::Unicode(code)) => {
-                    // The character is what a text control reads.
-                    post(evt, 0, char::from_u32(*code));
-                }
-                Some(key_event::Union::ControlKey(ck)) => match control_key_vk(ck.value()) {
-                    Some(vk) => post(evt, vk, None),
-                    None => {
-                        if evt.down {
-                            log::warn!("shadow desktop control key {ck:?} is not mapped yet");
-                        }
-                    }
-                },
-                other => {
-                    // `chr` carries a platform scan code and `seq` a text sequence; neither is
-                    // mapped yet, and saying so beats guessing.
-                    if evt.down {
-                        log::warn!("shadow desktop key not handled yet: {other:?}");
-                    }
-                }
-            }
-            true
-        }
-
-        fn active() -> bool {
-            mode::is_active() && mode::is_viewing_shadow_any()
-        }
-
-        fn post(evt: &KeyEvent, vk: u16, ch: Option<char>) {
-            // No window given: the module posts to the one a click last landed on, which is
-            // what a hidden desktop has instead of a foreground window.
-            match input::post_key(SHADOW_DESKTOP, None, vk, ch, evt.down) {
-                Ok(what) => log::debug!("shadow desktop {what}"),
-                Err(e) => log::warn!("shadow desktop key failed: {e}"),
-            }
-        }
-
-        /// The control keys this path knows how to post, by the numbering the protocol
-        /// carries. Anything else is reported rather than guessed at.
-        fn control_key_vk(ck: i32) -> Option<u16> {
-            Some(match ck {
-                1 => 0x12,   // Alt
-                2 => 0x08,   // Backspace
-                3 => 0x14,   // CapsLock
-                4 => 0x11,   // Control
-                5 => 0x2E,   // Delete
-                6 => 0x28,   // DownArrow
-                7 => 0x23,   // End
-                8 => 0x1B,   // Escape
-                31 => 0x09,  // Tab
-                32 => 0x26,  // UpArrow
-                33..=42 => (0x60 + (ck - 33)) as u16, // Numpad0..Numpad9
-                58 => 0x2D,  // Insert
-                63 => 0x90,  // NumLock
-                72 => 0x0D,  // NumpadEnter
-                73 => 0xA1,  // RShift
-                74 => 0xA3,  // RControl
-                75 => 0xA5,  // RAlt
-                _ => return None,
-            })
-        }
-    }
-
     pub fn handle_mouse(
         evt: &MouseEvent,
         conn: i32,
@@ -1690,10 +1548,6 @@ pub mod client {
         simulate: bool,
         show_cursor: bool,
     ) {
-        #[cfg(all(windows, feature = "shadow-desktop"))]
-        if shadow_input::route_mouse(evt, simulate) {
-            return;
-        }
         if RUNNING.lock().unwrap().clone() {
             crate::input_service::update_latest_input_cursor_time(conn);
             handle_mouse_(evt, conn, username, argb, simulate, show_cursor).ok();
@@ -1712,10 +1566,6 @@ pub mod client {
     }
 
     pub fn handle_key(evt: &KeyEvent) {
-        #[cfg(all(windows, feature = "shadow-desktop"))]
-        if shadow_input::route_key(evt) {
-            return;
-        }
         if RUNNING.lock().unwrap().clone() {
             handle_key_(evt).ok();
         } else {
