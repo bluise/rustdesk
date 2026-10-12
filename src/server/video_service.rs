@@ -317,6 +317,154 @@ pub fn new(source: VideoSource, idx: usize) -> GenericService {
     vs.sp
 }
 
+/// The shadow desktop's frames, wrapped so the video pipeline can consume them like any
+/// other capturer.
+///
+/// Thin on purpose: the desktop is read by `shadow_desktop`'s own worker thread, which is
+/// attached to that desktop and knows nothing about scrap. Keeping the scrap-facing part
+/// here leaves the module free of scrap, which is what keeps it compile-checked by
+/// tools/hvnc-probe.
+#[cfg(all(windows, feature = "shadow-desktop"))]
+mod shadow_capturer {
+    use std::io::{Error, ErrorKind};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    // The file's own `use` does not reach into a nested module, so this one asks for the
+    // logger itself.
+    use hbb_common::log;
+
+    use crate::shadow_desktop::{capture, mode, SHADOW_DESKTOP, SHADOW_DISPLAY_NAME};
+
+    pub const DISPLAY_NAME: &str = SHADOW_DISPLAY_NAME;
+
+    /// A stall is reported at most this often, so the log shows the age of the last frame
+    /// instead of filling up.
+    const STALL_WARN_INTERVAL: Duration = Duration::from_secs(5);
+
+    /// Process-wide, so a capturer that gets recreated every second cannot reset the throttle
+    /// and hide a stall that has already lasted a while. Seconds since the Unix epoch; 0 means
+    /// "never warned".
+    static LAST_STALL_WARN: AtomicU64 = AtomicU64::new(0);
+
+    fn unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default()
+    }
+
+    pub struct ShadowCapturer {
+        worker: capture::Worker,
+        /// The newest frame, handed out by reference so it lives next to the capturer. A late
+        /// frame repeats this one instead of erroring, which keeps the stream alive; `None`
+        /// until the first frame arrives.
+        last_frame: Option<Vec<u8>>,
+        /// The last failure already logged, so a failing capture is reported once per distinct
+        /// reason instead of once per frame.
+        reported: Option<String>,
+        /// When the "repeating the previous frame" line was last printed.
+        last_repeat_log: Instant,
+        /// Whether the delivered frame size has already been logged for this capturer.
+        logged_frame: bool,
+    }
+
+    impl ShadowCapturer {
+        pub fn new() -> std::io::Result<Self> {
+            let size = mode::frame_size().map(|size| (size.width, size.height));
+            let worker = capture::spawn_worker(SHADOW_DESKTOP, mode::fps(), size)
+                .map_err(|e| Error::new(ErrorKind::Other, e))?;
+            Ok(Self {
+                worker,
+                last_frame: None,
+                reported: None,
+                last_repeat_log: Instant::now(),
+                logged_frame: false,
+            })
+        }
+
+        /// Reports a stalled worker, at most once per interval across every capturer instance.
+        fn warn_stall(&self) {
+            let now = unix_secs();
+            let last = LAST_STALL_WARN.load(Ordering::Relaxed);
+            if now.saturating_sub(last) >= STALL_WARN_INTERVAL.as_secs() {
+                LAST_STALL_WARN.store(now, Ordering::Relaxed);
+                log::warn!(
+                    "shadow capturer produced no frame for {:.1}s (method {})",
+                    self.worker.since_last_frame().as_secs_f64(),
+                    self.worker.method().label()
+                );
+            }
+        }
+    }
+
+    impl scrap::TraitCapturer for ShadowCapturer {
+        fn frame<'a>(&'a mut self, timeout: Duration) -> std::io::Result<scrap::Frame<'a>> {
+            match self.worker.next_frame(timeout) {
+                Some(frame) => {
+                    if !self.logged_frame {
+                        log::info!(
+                            "shadow capturer frame: {}x{} ({} bytes)",
+                            self.worker.width,
+                            self.worker.height,
+                            frame.len()
+                        );
+                        self.logged_frame = true;
+                    }
+                    self.last_frame = Some(frame);
+                }
+                // A late frame is not an error: repeating the previous one keeps the stream
+                // alive, which is what the client needs.
+                None => {
+                    if let Some(e) = self.worker.last_error() {
+                        if self.reported.as_deref() != Some(e.as_str()) {
+                            log::warn!("shadow capture is failing: {e}");
+                            self.reported = Some(e);
+                        }
+                    }
+                    // A worker parked in PrintWindow sets no error, so without this the stall
+                    // is silent. The age of the newest frame is what makes it visible.
+                    self.warn_stall();
+                    if self.last_frame.is_none() {
+                        // The constructor waits for a first frame, so this is unreachable.
+                        return Err(Error::new(ErrorKind::TimedOut, "no shadow frame"));
+                    }
+                    if self.last_repeat_log.elapsed() >= STALL_WARN_INTERVAL {
+                        log::debug!("shadow capturer is repeating the previous frame");
+                        self.last_repeat_log = Instant::now();
+                    }
+                }
+            }
+            let buffer = self
+                .last_frame
+                .as_ref()
+                .ok_or_else(|| Error::new(ErrorKind::TimedOut, "no shadow frame"))?;
+            Ok(scrap::Frame::PixelBuffer(scrap::PixelBuffer::with_BGRA(
+                buffer,
+                self.worker.width,
+                self.worker.height,
+            )))
+        }
+
+        fn is_gdi(&self) -> bool {
+            // PrintWindow is a software path, which is what the pipeline reads this flag for.
+            true
+        }
+
+        fn set_gdi(&mut self) -> bool {
+            true
+        }
+
+        #[cfg(feature = "vram")]
+        fn device(&self) -> scrap::AdapterDevice {
+            Default::default()
+        }
+
+        #[cfg(feature = "vram")]
+        fn set_output_texture(&mut self, _texture: bool) {}
+    }
+}
+
 // Capturer object is expensive, avoiding to create it frequently.
 fn create_capturer(
     privacy_mode_id: i32,
@@ -324,6 +472,27 @@ fn create_capturer(
     _current: usize,
     _portable_service_running: bool,
 ) -> ResultType<Box<dyn TraitCapturer>> {
+    // The shadow desktop is not a monitor: it is fed by the module, and only while the mode
+    // is on (and only for its own entry in the display list - the real screens keep using
+    // the platform capturer exactly as before).
+    #[cfg(all(windows, feature = "shadow-desktop"))]
+    if crate::shadow_desktop::mode::is_active() && display.name() == shadow_capturer::DISPLAY_NAME
+    {
+        // Logged at both ends: without it a capturer that never produces a frame is
+        // indistinguishable from one that was never created, which is what made the first
+        // machine test unreadable.
+        match shadow_capturer::ShadowCapturer::new() {
+            Ok(capturer) => {
+                log::info!("shadow capturer is up for display {_current}");
+                return Ok(Box::new(capturer));
+            }
+            Err(e) => {
+                log::error!("shadow capturer could not start: {e}");
+                bail!("shadow capturer could not start: {e}");
+            }
+        }
+    }
+
     #[cfg(not(windows))]
     let c: Option<Box<dyn TraitCapturer>> = None;
     #[cfg(windows)]
@@ -459,6 +628,9 @@ fn get_capturer_monitor(
     }
 
     let mut displays = Display::all()?;
+    // The capture path has to see the same list the client was offered, or it captures a real
+    // screen while input goes to the hidden desktop.
+    crate::server::display_service::add_shadow_display(&mut displays);
     let ndisplay = displays.len();
     if ndisplay <= current {
         bail!(
