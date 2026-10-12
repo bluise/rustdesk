@@ -9,19 +9,22 @@
 //! shorter-than-expected return. Every call is checked.
 
 use std::mem::{size_of, zeroed};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE, UINT};
 use winapi::shared::windef::{HWND, POINT, RECT};
 use winapi::um::winuser::{
-    BringWindowToTop, ClientToScreen, EnumWindows, GetClientRect, GetCursorPos,
-    GetForegroundWindow, GetSystemMetrics, GetWindowTextW, IsWindowVisible, PostMessageW,
+    BringWindowToTop, ClientToScreen, EnumWindows, GetAncestor, GetClientRect, GetDoubleClickTime,
+    GetForegroundWindow, GetSystemMetrics, GetWindowTextW, INPUT_u, IsWindowVisible, PostMessageW,
     RealChildWindowFromPoint, ScreenToClient, SendInput, SetFocus, SetForegroundWindow,
-    WindowFromPoint, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, INPUT_u, KEYBDINPUT, KEYEVENTF_KEYUP,
-    LPINPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SM_CXSCREEN, SM_CYSCREEN, WM_CHAR,
-    WM_KEYDOWN, WM_KEYUP,
+    WindowFromPoint, GA_ROOT, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
+    LPINPUT, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SM_CXSCREEN,
+    SM_CYSCREEN, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
 };
 
 use super::desktop::AttachedDesktop;
@@ -237,7 +240,11 @@ fn pick_target(hwnd: Option<isize>) -> Result<(HWND, String), String> {
         match found {
             Some((frame, title)) => {
                 let target = deepest_child_at(frame);
-                let suffix = if target == frame { "" } else { " (child control)" };
+                let suffix = if target == frame {
+                    ""
+                } else {
+                    " (child control)"
+                };
                 Ok((target, format!("{:#x} {title:?}{suffix}", target as usize)))
             }
             None => Err("no visible window with a title on this desktop".to_owned()),
@@ -303,14 +310,19 @@ pub fn window_at(desktop: &str, x: i32, y: i32) -> Result<isize, String> {
     .map_err(|_| "input thread panicked".to_owned())?
 }
 
+/// Which button the operator is holding, so a move can carry it and a drag can be told
+/// apart from a hover.
+static HELD_BUTTON: AtomicU32 = AtomicU32::new(0);
+/// The last press, for telling a double click's second press apart from a fresh one.
+static LAST_PRESS: Mutex<Option<(Instant, i32, i32)>> = Mutex::new(None);
+
 /// Injects a mouse event at `(x, y)` into this desktop.
 ///
-/// Real input rather than a posted message. A posted `WM_LBUTTONDOWN` reaches a control
-/// that paints a selection and stops there: the desktop's own cursor never moves and the
-/// real button state never changes, so everything Windows decides for itself is missing -
-/// the title bar and its close button, activation, dragging, and the shell's handling of
-/// the desktop and its icons. A shell that is handed a message it did not see a button
-/// press for selects the icon and refuses to open it.
+/// Posted window messages rather than `SendInput`: Windows delivers injected input to the
+/// input desktop only, so on a hidden desktop every `SendInput` call reports "delivered 0
+/// of 1" and the screen is dead to the operator. Posting reaches any desktop, and pays for
+/// it with the parts Windows would otherwise do itself - the frame (title bar, its buttons,
+/// dragging, activation) and the shell gestures that insist on a real button state.
 pub fn send_mouse_at(desktop: &str, x: i32, y: i32, action: MouseAction) -> Result<String, String> {
     let desktop = desktop.to_owned();
     thread::spawn(move || mouse_at_on_thread(&desktop, x, y, action))
@@ -335,38 +347,130 @@ fn mouse_at_on_thread(
         _ => super::mode::cursor().unwrap_or((x, y)),
     };
     let _attached = AttachedDesktop::attach(desktop)?;
-    let (screen_w, screen_h) =
-        unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
-    let (flags, wheel) = match action {
-        MouseAction::Move => (0, 0),
-        MouseAction::Down(MouseButton::Left) => (MOUSEEVENTF_LEFTDOWN, 0),
-        MouseAction::Up(MouseButton::Left) => (MOUSEEVENTF_LEFTUP, 0),
-        MouseAction::Down(MouseButton::Right) => (MOUSEEVENTF_RIGHTDOWN, 0),
-        MouseAction::Up(MouseButton::Right) => (MOUSEEVENTF_RIGHTUP, 0),
-        MouseAction::Down(MouseButton::Middle) => (MOUSEEVENTF_MIDDLEDOWN, 0),
-        MouseAction::Up(MouseButton::Middle) => (MOUSEEVENTF_MIDDLEUP, 0),
-        MouseAction::Wheel(delta) => (MOUSEEVENTF_WHEEL, delta),
+    let target = unsafe { deepest_at(POINT { x, y }) };
+    if target.is_null() {
+        return Err(format!("no window at {x},{y}"));
+    }
+    let mut note = String::new();
+    // Mouse messages carry client coordinates; the wheel is the exception and takes the
+    // screen point.
+    let (cx, cy) = client_point(target, x, y);
+    let (message, wparam, lparam) = match action {
+        MouseAction::Move => (
+            WM_MOUSEMOVE,
+            HELD_BUTTON.load(Ordering::SeqCst) as usize,
+            pack(cx, cy),
+        ),
+        MouseAction::Down(button) => {
+            // A posted click cannot activate a window, and everything the frame owns - the
+            // title bar, its buttons, dragging - is decided by Windows, not by the control.
+            activate(target, &mut note);
+            let double = matches!(button, MouseButton::Left) && second_press(x, y);
+            HELD_BUTTON.store(button_mask(button), Ordering::SeqCst);
+            (
+                if double {
+                    WM_LBUTTONDBLCLK
+                } else {
+                    down_message(button)
+                },
+                button_mask(button) as usize,
+                pack(cx, cy),
+            )
+        }
+        MouseAction::Up(button) => {
+            HELD_BUTTON.store(0, Ordering::SeqCst);
+            (up_message(button), 0, pack(cx, cy))
+        }
+        MouseAction::Wheel(delta) => (
+            WM_MOUSEWHEEL,
+            ((delta as u32 & 0xFFFF) << 16) as usize,
+            pack(x, y),
+        ),
     };
-    send_mouse(x, y, flags, wheel, screen_w, screen_h)?;
-    // Read the desktop's own cursor back: it is the one thing that says the event landed
-    // here rather than on the desktop the user is looking at.
-    let mut at = POINT { x: -1, y: -1 };
-    let where_ = if unsafe { GetCursorPos(&mut at) } != FALSE {
-        format!("cursor {},{}", at.x, at.y)
-    } else {
-        format!("cursor unreadable: {}", last_error())
-    };
-    let mut note = format!("mouse {action:?} at {x},{y} ({where_})");
+    if unsafe { PostMessageW(target, message, wparam, lparam) } == FALSE {
+        return Err(format!(
+            "PostMessage({message:#x}) to {:#x} failed: {}",
+            target as usize,
+            last_error()
+        ));
+    }
     // Remember where a click landed: keyboard input follows it, because a hidden desktop
     // never has a foreground window to ask.
     if let MouseAction::Down(_) = action {
-        let hwnd = unsafe { deepest_at(POINT { x, y }) };
-        if !hwnd.is_null() {
-            super::mode::set_focus(Some(hwnd as isize));
-            note.push_str(&format!(" on {:#x}", hwnd as usize));
-        }
+        super::mode::set_focus(Some(target as isize));
     }
+    note.push_str(&format!(
+        "mouse {action:?} at {x},{y} -> {:#x} {message:#x}",
+        target as usize
+    ));
     Ok(note)
+}
+
+/// Client coordinates of a screen point inside `hwnd`.
+fn client_point(hwnd: HWND, x: i32, y: i32) -> (i32, i32) {
+    let mut point = POINT { x, y };
+    if unsafe { ScreenToClient(hwnd, &mut point) } == FALSE {
+        return (x, y);
+    }
+    (point.x, point.y)
+}
+
+/// Two 16-bit halves, low first - the layout every mouse message expects.
+fn pack(x: i32, y: i32) -> isize {
+    (((y as u32 & 0xFFFF) << 16) | (x as u32 & 0xFFFF)) as isize
+}
+
+fn button_mask(button: MouseButton) -> u32 {
+    match button {
+        MouseButton::Left => MK_LBUTTON,
+        MouseButton::Right => MK_RBUTTON,
+        MouseButton::Middle => MK_MBUTTON,
+    }
+}
+
+fn down_message(button: MouseButton) -> u32 {
+    match button {
+        MouseButton::Left => WM_LBUTTONDOWN,
+        MouseButton::Right => WM_RBUTTONDOWN,
+        MouseButton::Middle => WM_MBUTTONDOWN,
+    }
+}
+
+fn up_message(button: MouseButton) -> u32 {
+    match button {
+        MouseButton::Left => WM_LBUTTONUP,
+        MouseButton::Right => WM_RBUTTONUP,
+        MouseButton::Middle => WM_MBUTTONUP,
+    }
+}
+
+/// True when this press is the second half of a double click: the same spot within the
+/// system's interval. Without it the shell selects the desktop icon and refuses to open
+/// it, because it never saw the press a double click is built from.
+fn second_press(x: i32, y: i32) -> bool {
+    let interval = unsafe { GetDoubleClickTime() }.max(1) as u64;
+    let now = Instant::now();
+    let mut last = LAST_PRESS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = *last;
+    let second = matches!(previous, Some((at, px, py))
+        if now.duration_since(at) <= Duration::from_millis(interval)
+            && (px - x).abs() <= 4
+            && (py - y).abs() <= 4);
+    *last = if second { None } else { Some((now, x, y)) };
+    second
+}
+
+/// Brings the window's frame forward. A posted message cannot activate a window, and an
+/// inactive window ignores the click.
+unsafe fn activate(target: HWND, note: &mut String) {
+    let frame = GetAncestor(target, GA_ROOT);
+    let frame = if frame.is_null() { target } else { frame };
+    if SetForegroundWindow(frame) == FALSE {
+        let _ = BringWindowToTop(frame);
+    }
+    note.push_str(&format!("activated {:#x}; ", frame as usize));
 }
 
 /// Posts one half of a keystroke to a window of this desktop.
