@@ -1551,11 +1551,13 @@ pub mod client {
         use base::message_proto::{key_event, KeyEvent, MouseEvent};
         // A use in the enclosing module does not reach into a nested one.
         use hbb_common::log;
+        use winapi::um::winuser;
 
         use crate::shadow_desktop::{input, mode, SHADOW_DESKTOP};
         use crate::common::input::{
-            MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_WHEEL, MOUSE_TYPE_DOWN,
-            MOUSE_TYPE_MASK, MOUSE_TYPE_MOVE_RELATIVE, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL,
+            MOUSE_BUTTON_BACK, MOUSE_BUTTON_FORWARD, MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT,
+            MOUSE_BUTTON_WHEEL, MOUSE_TYPE_DOWN, MOUSE_TYPE_MASK, MOUSE_TYPE_MOVE_RELATIVE,
+            MOUSE_TYPE_TRACKPAD, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL,
         };
 
         /// Returns true when the event was handled here and must not go on to the platform.
@@ -1563,6 +1565,10 @@ pub mod client {
             if !active() {
                 return false;
             }
+            // The client sends the whole held modifier set with every event, so the key state
+            // is refreshed even for the events dropped below: otherwise a modifier the
+            // operator let go of stays down for as long as the mouse keeps moving.
+            mode::set_modifiers(&held_virtual_keys(evt.modifiers.iter().map(|ck| ck.value())));
             if !simulate {
                 // Nothing to inject, but it must not reach the platform either.
                 return true;
@@ -1583,35 +1589,80 @@ pub mod client {
             let Some((x, y)) = point else {
                 return true;
             };
-            let action = match event {
+            // A trackpad gesture can carry both axes in one event, so an event can be more
+            // than one action.
+            let mut pending: [Option<input::MouseAction>; 2] = [None, None];
+            match event {
                 // Which button is in the top bits of the mask; the event type alone says
                 // only that one of them moved. Reading it as "the left one" turned every
                 // right-click into a left one, and the desktop's context menu with it.
                 MOUSE_TYPE_DOWN | MOUSE_TYPE_UP => {
-                    let button = match evt.mask >> 3 {
-                        MOUSE_BUTTON_RIGHT => input::MouseButton::Right,
-                        MOUSE_BUTTON_WHEEL => input::MouseButton::Middle,
-                        MOUSE_BUTTON_LEFT => input::MouseButton::Left,
+                    let down = event == MOUSE_TYPE_DOWN;
+                    pending[0] = Some(match evt.mask >> 3 {
+                        MOUSE_BUTTON_RIGHT => click(input::MouseButton::Right, down),
+                        MOUSE_BUTTON_WHEEL => click(input::MouseButton::Middle, down),
+                        MOUSE_BUTTON_LEFT => click(input::MouseButton::Left, down),
+                        // Mouse 4 and 5 are their own message rather than a button in the
+                        // held state. Letting them fall into the catch-all is what made the
+                        // side buttons do nothing at all.
+                        MOUSE_BUTTON_BACK => input::MouseAction::XButton {
+                            forward: false,
+                            down,
+                        },
+                        MOUSE_BUTTON_FORWARD => input::MouseAction::XButton {
+                            forward: true,
+                            down,
+                        },
                         _ => return true,
-                    };
-                    if event == MOUSE_TYPE_DOWN {
-                        input::MouseAction::Down(button)
-                    } else {
-                        input::MouseAction::Up(button)
+                    });
+                }
+                // A trackpad gesture is its own event type but means the same thing; the
+                // platform path handles the two together, so this one does too. A tilt is
+                // carried in x and the platform path negates it before handing it to the OS,
+                // so the sign here is the one a real tilt produces.
+                MOUSE_TYPE_WHEEL | MOUSE_TYPE_TRACKPAD => {
+                    let mut slot = 0;
+                    if evt.x != 0 {
+                        pending[slot] = Some(input::MouseAction::HorizontalWheel(-evt.x));
+                        slot += 1;
+                    }
+                    if evt.y != 0 {
+                        pending[slot] = Some(input::MouseAction::Wheel(evt.y));
+                    }
+                    if pending[0].is_none() {
+                        return true;
                     }
                 }
-                MOUSE_TYPE_WHEEL => input::MouseAction::Wheel(evt.y),
-                _ => input::MouseAction::Move,
-            };
-            // Debug on every event: "the hook never fired" and "the hook fired and the
-            // event went nowhere" look identical from the outside otherwise. The note
-            // carries the desktop's own cursor position, which says which of the two it
-            // was.
-            match input::send_mouse_at(SHADOW_DESKTOP, x, y, action) {
-                Ok(what) => log::debug!("shadow desktop mouse: {what}"),
-                Err(e) => log::warn!("shadow desktop mouse failed: {e}"),
+                _ => pending[0] = Some(input::MouseAction::Move),
+            }
+            for action in pending.into_iter().flatten() {
+                // Debug on every event: "the hook never fired" and "the hook fired and the
+                // event went nowhere" look identical from the outside otherwise. The note
+                // carries the desktop's own cursor position, which says which of the two it
+                // was.
+                match input::send_mouse_at(SHADOW_DESKTOP, x, y, action) {
+                    Ok(what) => log::debug!("shadow desktop mouse: {what}"),
+                    Err(e) => log::warn!("shadow desktop mouse failed: {e}"),
+                }
             }
             true
+        }
+
+        fn click(button: input::MouseButton, down: bool) -> input::MouseAction {
+            if down {
+                input::MouseAction::Down(button)
+            } else {
+                input::MouseAction::Up(button)
+            }
+        }
+
+        /// The virtual keys to hold down for the modifier set the client reports.
+        ///
+        /// Anything that is not a modifier is skipped: a key being held is not the same as a
+        /// key being down in the queue, and only the modifiers change what the next message
+        /// means. `mode` adds the generic spelling of each side-specific one.
+        fn held_virtual_keys(values: impl Iterator<Item = i32>) -> Vec<u16> {
+            values.filter_map(control_key_vk).collect()
         }
 
         /// Returns true when the event was handled here and must not go on to the platform.
@@ -1619,6 +1670,9 @@ pub mod client {
             if !active() {
                 return false;
             }
+            // Same as the mouse path: the held set arrives with every event, so the key state
+            // the target reads is rebuilt from it before anything is posted.
+            mode::set_modifiers(&held_virtual_keys(evt.modifiers.iter().map(|ck| ck.value())));
             match &evt.union {
                 Some(key_event::Union::Unicode(code)) => {
                     // The character is what a text control reads.
@@ -1628,13 +1682,31 @@ pub mod client {
                     Some(vk) => post(evt, vk, None),
                     None => {
                         if evt.down {
-                            log::warn!("shadow desktop control key {ck:?} is not mapped yet");
+                            log::warn!("shadow desktop control key {ck:?} is not mapped");
                         }
                     }
                 },
+                Some(key_event::Union::Chr(code)) => match scan_code_vk(*code) {
+                    Some(vk) => post(evt, vk, None),
+                    None => {
+                        if evt.down {
+                            log::warn!("shadow desktop scan code {code:#x} has no virtual key");
+                        }
+                    }
+                },
+                Some(key_event::Union::Seq(text)) => {
+                    // Text a platform input method has already composed: the characters are
+                    // what the control reads, so the run is posted as it stands.
+                    if evt.down && !text.is_empty() {
+                        match input::post_text(SHADOW_DESKTOP, None, text) {
+                            Ok(what) => log::debug!("shadow desktop {what}"),
+                            Err(e) => log::warn!("shadow desktop text failed: {e}"),
+                        }
+                    }
+                }
                 other => {
-                    // `chr` carries a platform scan code and `seq` a text sequence; neither is
-                    // mapped yet, and saying so beats guessing.
+                    // `win2win_hotkey` carries a whole system hotkey rather than one key, and
+                    // it needs its own translation; saying so beats guessing.
                     if evt.down {
                         log::warn!("shadow desktop key not handled yet: {other:?}");
                     }
@@ -1656,6 +1728,18 @@ pub mod client {
             }
         }
 
+        /// The virtual key Windows posts for a scan code, or nothing when it has none.
+        fn scan_code_vk(code: u32) -> Option<u16> {
+            // MAPVK_VSC_TO_VK_EX: the left/right-specific key wherever the code has one.
+            // Posted messages carry no device state, so the low byte is the whole code.
+            let vk = unsafe { winuser::MapVirtualKeyW(code & 0xFF, 3) };
+            if vk == 0 {
+                None
+            } else {
+                Some(vk as u16)
+            }
+        }
+
         /// The control keys this path knows how to post, by the numbering the protocol
         /// carries. Anything else is reported rather than guessed at.
         fn control_key_vk(ck: i32) -> Option<u16> {
@@ -1668,15 +1752,66 @@ pub mod client {
                 6 => 0x28,   // DownArrow
                 7 => 0x23,   // End
                 8 => 0x1B,   // Escape
+                9 => 0x70,   // F1
+                10 => 0x79,  // F10
+                11 => 0x7A,  // F11
+                12 => 0x7B,  // F12
+                13 => 0x71,  // F2
+                14 => 0x72,  // F3
+                15 => 0x73,  // F4
+                16 => 0x74,  // F5
+                17 => 0x75,  // F6
+                18 => 0x76,  // F7
+                19 => 0x77,  // F8
+                20 => 0x78,  // F9
+                21 => 0x24,  // Home
+                22 => 0x25,  // LeftArrow
+                23 => 0x5B,  // Meta, the Windows key here
+                24 => 0x12,  // Option, which is Alt here
+                25 => 0x22,  // PageDown
+                26 => 0x21,  // PageUp
+                27 => 0x0D,  // Return
+                28 => 0x27,  // RightArrow
+                29 => 0x10,  // Shift
+                30 => 0x20,  // Space
                 31 => 0x09,  // Tab
                 32 => 0x26,  // UpArrow
                 33..=42 => (0x60 + (ck - 33)) as u16, // Numpad0..Numpad9
+                43 => 0x03,  // Cancel
+                44 => 0x0C,  // Clear
+                45 => 0x12,  // Menu, another name for Alt
+                46 => 0x13,  // Pause
+                47 | 48 => 0x15, // Kana, Hangul
+                49 | 51 | 52 => 0x19, // Junja, Hanja, Kanji
+                50 => 0x18,  // Final
+                53 => 0x1C,  // Convert
+                54 => 0x29,  // Select
+                55 => 0x2A,  // Print
+                56 => 0x2B,  // Execute
+                57 => 0x2C,  // Snapshot
                 58 => 0x2D,  // Insert
+                59 => 0x2F,  // Help
+                60 => 0x5F,  // Sleep
+                61 => 0x6C,  // Separator
+                62 => 0x91,  // Scroll
                 63 => 0x90,  // NumLock
+                64 => 0x5C,  // RWin
+                65 => 0x5D,  // Apps
+                66 => 0x6A,  // Multiply
+                67 => 0x6B,  // Add
+                68 => 0x6D,  // Subtract
+                69 => 0x6E,  // Decimal
+                70 => 0x6F,  // Divide
+                71 => 0xBB,  // Equals
                 72 => 0x0D,  // NumpadEnter
                 73 => 0xA1,  // RShift
                 74 => 0xA3,  // RControl
                 75 => 0xA5,  // RAlt
+                76 => 0xAD,  // VolumeMute
+                77 => 0xAF,  // VolumeUp
+                78 => 0xAE,  // VolumeDown
+                79 => 0x5E,  // Power
+                // Unknown, and the two secure-attention keys, which nothing can post.
                 _ => return None,
             })
         }

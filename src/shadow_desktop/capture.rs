@@ -27,8 +27,8 @@ use winapi::um::wingdi::{
     SRCCOPY,
 };
 use winapi::um::winuser::{
-    EnumWindows, GetClassNameW, GetDC, GetSystemMetrics, GetWindowRect, IsWindowVisible,
-    PrintWindow, ReleaseDC, SM_CXSCREEN, SM_CYSCREEN,
+    EnumWindows, GetClassNameW, GetDC, GetSystemMetrics, GetWindowLongW, GetWindowRect,
+    IsWindowVisible, PrintWindow, ReleaseDC, SM_CXSCREEN, SM_CYSCREEN,
 };
 
 use super::desktop::AttachedDesktop;
@@ -36,6 +36,13 @@ use super::{last_error, wide};
 
 /// `PW_RENDERFULLCONTENT`: also ask for content drawn by DirectComposition.
 const PW_RENDERFULLCONTENT: UINT = 0x0000_0002;
+
+/// A window that refuses activation never carries content: tool tips, the language input
+/// indicator, the IME UI and their like. On a desktop nobody is looking at, `PrintWindow`
+/// renders such a window as a solid black rectangle - the little black box in the corner of
+/// the screen - so they are not composited at all.
+const GWL_EXSTYLE: i32 = -20;
+const WS_EX_NOACTIVATE: i32 = 0x0800_0000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -333,6 +340,11 @@ unsafe extern "system" fn collect_visible(hwnd: HWND, lparam: LPARAM) -> BOOL {
         return TRUE;
     }
     if is_blocking_class(hwnd) {
+        return TRUE;
+    }
+    // No-activate windows are overlays and indicators, not content; on a hidden desktop they
+    // paint as solid black and must not be composited.
+    if GetWindowLongW(hwnd, GWL_EXSTYLE) as i32 & WS_EX_NOACTIVATE != 0 {
         return TRUE;
     }
     let mut rect: RECT = zeroed();

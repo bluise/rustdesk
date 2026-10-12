@@ -2,12 +2,20 @@
 //! C1 can be proven on its own on a real machine before any of it is wired into
 //! RustDesk.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::time::Duration;
+
+use winapi::shared::minwindef::FALSE;
+use winapi::um::winuser::{PostMessageW, WM_SYSCOMMAND};
 
 use crate::bmp;
 use crate::target;
 use crate::shadow_desktop::{capture, desktop, input, launch, windows, SHADOW_DESKTOP};
+
+/// The command a window's own close box stands for; also how a window this tool opened by
+/// accident is sent away.
+const SC_CLOSE: usize = 0xF060;
 
 /// Printed on every run: when a report says "it failed", this says which binary produced
 /// it, so an old copy on disk cannot be mistaken for a new one.
@@ -26,11 +34,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "diag" => diag_cmd(rest),
         "windows" => windows_cmd(rest),
         "click" => click_cmd(rest),
+        "lclick" => lclick_cmd(rest),
+        "dblclick" => dblclick_cmd(rest),
+        "rclick" => rclick_cmd(rest),
         "move" => move_cmd(rest),
         "key" => key_cmd(rest),
         "focus" => focus_cmd(rest),
         "type" => type_cmd(rest),
         "target" => target_cmd(rest),
+        "selftest" => selftest_cmd(rest),
         "demo" => demo(rest),
         "help" | "-h" | "--help" => {
             println!("{}", usage());
@@ -50,11 +62,15 @@ hvnc-probe <command> [args]
   diag    <desktop> [out-prefix]           try every capture method and report each
   windows <desktop>                        list the windows living on that desktop
   click   <desktop> <x> <y>                left click at x,y on that desktop
+  lclick  <desktop> <x> <y>                left click via the posted path, report the target
+  dblclick <desktop> <x> <y>               double click via the posted path
+  rclick  <desktop> <x> <y>                right click via the posted path, report the menu
   move    <desktop> <x> <y>                move the pointer there
   key     <desktop> <vk> [down|up]         virtual key, hex - 0D is Enter
   focus   <desktop> [hwnd]                 bring a window of that desktop to the front
   type    <desktop> <text> [hwnd]          post characters to a window there
   target  <desktop>                        open a plain text target on that desktop
+  selftest <winprobe.exe> <logfile>        drive the posted input path end to end and report
   demo    [program] [args...]              create + launch + capture, then hold open
 
 Run `create` in one terminal and drive it from another: a desktop is destroyed as
@@ -119,6 +135,12 @@ fn target_cmd(rest: &[String]) -> Result<(), String> {
     target::run(name)
 }
 
+fn selftest_cmd(rest: &[String]) -> Result<(), String> {
+    let exe = arg(rest, 0, "<winprobe.exe>")?;
+    let log = arg(rest, 1, "<logfile>")?;
+    crate::input_test::run(exe, log)
+}
+
 /// Window handles are printed as hex, so accept them that way too.
 fn parse_hwnd(raw: Option<&String>) -> Result<Option<isize>, String> {
     match raw {
@@ -176,6 +198,111 @@ fn click_cmd(rest: &[String]) -> Result<(), String> {
     input::send(name, &[input::Action::LeftClick { x, y }])?;
     println!("clicked {x},{y} on {name}");
     Ok(())
+}
+
+/// A left click through the product's own posted path, with the target window reported.
+fn lclick_cmd(rest: &[String]) -> Result<(), String> {
+    let name = arg(rest, 0, "<desktop>")?;
+    let x = parse_or(rest.get(1), 0i32, "<x>")?;
+    let y = parse_or(rest.get(2), 0i32, "<y>")?;
+    println!("{}", input::send_mouse_at(name, x, y, input::MouseAction::Move)?);
+    println!("{}", input::send_mouse_at(name, x, y, input::MouseAction::Down(input::MouseButton::Left))?);
+    println!("{}", input::send_mouse_at(name, x, y, input::MouseAction::Up(input::MouseButton::Left))?);
+    Ok(())
+}
+
+/// A double click through the product's posted path, for the caption (maximise/restore) and
+/// the desktop (open an icon).
+fn dblclick_cmd(rest: &[String]) -> Result<(), String> {
+    let name = arg(rest, 0, "<desktop>")?;
+    let x = parse_or(rest.get(1), 0i32, "<x>")?;
+    let y = parse_or(rest.get(2), 0i32, "<y>")?;
+    input::send_mouse_at(name, x, y, input::MouseAction::Move)?;
+    input::send_mouse_at(name, x, y, input::MouseAction::Down(input::MouseButton::Left))?;
+    input::send_mouse_at(name, x, y, input::MouseAction::Up(input::MouseButton::Left))?;
+    std::thread::sleep(Duration::from_millis(80));
+    println!("{}", input::send_mouse_at(name, x, y, input::MouseAction::Down(input::MouseButton::Left))?);
+    println!("{}", input::send_mouse_at(name, x, y, input::MouseAction::Up(input::MouseButton::Left))?);
+    Ok(())
+}
+
+/// A right click through the product's own *posted* path (the one the host uses), then a
+/// report of whether a context menu (#32768) appeared - and whether an item inside it can be
+/// driven, which is the part a modal menu loop most plausibly refuses.
+fn rclick_cmd(rest: &[String]) -> Result<(), String> {
+    let name = arg(rest, 0, "<desktop>")?;
+    let x = parse_or(rest.get(1), 0i32, "<x>")?;
+    let y = parse_or(rest.get(2), 0i32, "<y>")?;
+    println!("{}", input::send_mouse_at(name, x, y, input::MouseAction::Move)?);
+    println!(
+        "{}",
+        input::send_mouse_at(name, x, y, input::MouseAction::Down(input::MouseButton::Right))?
+    );
+    println!(
+        "{}",
+        input::send_mouse_at(name, x, y, input::MouseAction::Up(input::MouseButton::Right))?
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    let menu = open_menu(name)?;
+    let Some(menu) = menu else {
+        println!("no context menu appeared");
+        return Ok(());
+    };
+    println!("context menu appeared: {:#x} rect={:?}", menu.0, menu.1);
+
+    // The third item of a desktop menu is Refresh; clicking it is the one choice with no side
+    // effect. If the menu closes, the modal loop took the posted click, which is what
+    // "the context menu works" has to mean.
+    let (left, top, right, bottom) = menu.1;
+    let (ix, iy) = (left + (right - left) / 2, top + 92);
+    let before: HashSet<isize> = windows::list(name)?
+        .into_iter()
+        .filter(|w| w.visible)
+        .map(|w| w.hwnd)
+        .collect();
+    println!(
+        "{}",
+        input::send_mouse_at(name, ix, iy, input::MouseAction::Move)?
+    );
+    println!(
+        "{}",
+        input::send_mouse_at(name, ix, iy, input::MouseAction::Down(input::MouseButton::Left))?
+    );
+    println!(
+        "{}",
+        input::send_mouse_at(name, ix, iy, input::MouseAction::Up(input::MouseButton::Left))?
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    if open_menu(name)?.is_some() {
+        println!("menu STILL open after clicking an item");
+    } else {
+        println!("menu closed after clicking an item");
+    }
+    // Whichever item the click landed on may have opened a window of its own; anything new is
+    // sent away, so a later check is not measuring a window this one left behind.
+    let opened: Vec<isize> = windows::list(name)?
+        .into_iter()
+        .filter(|w| w.visible && !before.contains(&w.hwnd))
+        .map(|w| w.hwnd)
+        .collect();
+    for hwnd in &opened {
+        unsafe {
+            PostMessageW(*hwnd as winapi::shared::windef::HWND, WM_SYSCOMMAND, SC_CLOSE, 0);
+        }
+    }
+    if !opened.is_empty() {
+        println!("closed {} window(s) the menu item opened", opened.len());
+        std::thread::sleep(Duration::from_millis(700));
+    }
+    Ok(())
+}
+
+/// The visible context menu on a desktop, with its rectangle.
+fn open_menu(name: &str) -> Result<Option<(isize, (i32, i32, i32, i32))>, String> {
+    Ok(windows::list(name)?
+        .into_iter()
+        .find(|w| w.class == "#32768" && w.visible)
+        .map(|w| (w.hwnd, w.rect)))
 }
 
 fn move_cmd(rest: &[String]) -> Result<(), String> {

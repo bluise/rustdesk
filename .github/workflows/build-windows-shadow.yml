@@ -108,9 +108,18 @@ jobs:
           if [ -n "$sciter_dll" ]; then
             cp "$sciter_dll" dist/
           fi
-          # Ship the installer helper so the archive is self-contained: it registers this daemon in
-          # place as an auto-starting Windows service, using the directory it is unpacked into.
-          cp .github/scripts/install-service.bat dist/
+          # Ship the starter so the archive is self-contained: it starts this daemon in the
+          # logged-on user's own session, from the directory it is unpacked into, and keeps it
+          # starting there at every logon.
+          #
+          # Deliberately not install-service.bat: a Windows service does not work for this
+          # build. The hidden desktop is brought up by the windowless no-argument start
+          # (core_main.rs), and the service starts its child as `"<exe>" --server`
+          # (platform\windows.rs, launch_server), which never reaches that code - the client
+          # would get a server with no RUSTDESK-SHADOW in its display list. The mode also has
+          # to sit in the interactive window station of a logged-on session, which is where a
+          # logon-time start of the user's own process lands.
+          cp .github/scripts/install-shadow-autostart.bat dist/
           ls -l dist
           # Distinct publish name: the exe inside keeps the name `rustdesk.exe`, so without this the
           # shadow variant would overwrite the headless and windowed archives.

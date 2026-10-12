@@ -21,6 +21,8 @@ mod app;
 #[cfg(windows)]
 mod bmp;
 #[cfg(windows)]
+mod input_test;
+#[cfg(windows)]
 mod target;
 
 // The gating below copies the line in src/lib.rs on purpose: this probe must compile the

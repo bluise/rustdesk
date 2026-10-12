@@ -106,13 +106,50 @@ pub fn core_main() -> Option<Vec<String>> {
         }
     }
 
+    // Plugs in the virtual display the client is meant to work on, and reports whether one
+    // came up.
+    //
+    // A real display is driven with real input, which is what makes the shell work on it:
+    // the task bar, the start menu, the hover states - everything the hidden desktop's posted
+    // messages could not reach. The display driver (Amyuni usbmmidd) carries a Microsoft
+    // WHQL signature, so no test signing is involved; its files live next to the executable
+    // in `usbmmidd_v2/`.
+    #[cfg(windows)]
+    #[allow(dead_code)] // kept for the non-shadow build; the shadow build starts the desktop only
+    fn start_virtual_display() -> bool {
+        if !crate::virtual_display_manager::is_virtual_display_supported() {
+            log::info!("virtual display is not supported on this Windows version");
+            return false;
+        }
+        match crate::virtual_display_manager::plug_in_headless() {
+            Ok(()) => {
+                log::info!("virtual display is up");
+                true
+            }
+            Err(e) => {
+                log::error!("virtual display could not start: {e}");
+                false
+            }
+        }
+    }
+
     #[cfg(all(feature = "headless", not(feature = "flutter")))]
     if args.is_empty() {
         // Windowless daemon build: there is no UI to fall through to, so run the host server in
         // this process and stay here instead of entering the interactive/portable-service paths.
         hbb_common::init_log(false, "server");
+        // The isolated desktop the client works on. It is a separate desktop object, not a
+        // monitor: nothing on it is ever visible on the physical screens, and nothing done on
+        // it disturbs them - which is the whole point of the feature. A virtual display is
+        // the wrong tool for this: it is a real, shared monitor, so its desktop is the very
+        // one the physical screens show, and every window opened on it is as visible there as
+        // anywhere else. The shadow desktop is therefore the only thing started here.
         #[cfg(all(windows, feature = "shadow-desktop"))]
         start_shadow_desktop();
+        #[cfg(all(windows, not(feature = "shadow-desktop")))]
+        {
+            start_virtual_display();
+        }
         crate::start_server(true, no_server);
         return None;
     }

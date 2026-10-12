@@ -46,6 +46,16 @@ struct Session {
     frame_size: Option<FrameSize>,
     /// The desktop's own size, which relative mouse movement is clamped to.
     size: (i32, i32),
+    /// The key state the hidden desktop's input queue is given before every event.
+    ///
+    /// A posted message never touches the key state table, so without this every modifier
+    /// reads as up inside the target and Ctrl+C arrives as a plain `c`. Bit 0x80 per virtual
+    /// key means "down", which is the layout `SetKeyboardState` wants.
+    ///
+    /// Measured with `probe/03_posttest.py`: case g (a posted Ctrl is invisible to the
+    /// target) against case m (the same Ctrl, with the input queues joined and the state set,
+    /// is seen).
+    key_state: [u8; 256],
 }
 
 static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
@@ -111,16 +121,20 @@ pub fn enable(program: Option<&str>, fps: u32, frame_size: Option<FrameSize>) ->
         fps: fps.max(1),
         frame_size,
         size: super::capture::desktop_size(None)?,
+        key_state: [0u8; 256],
     });
     Ok(())
 }
 
-/// Whether Windows Explorer already has a window on this desktop.
+/// Whether Windows Explorer already runs as the shell of this desktop.
 ///
 /// The desktop and its windows outlive a restart of the daemon, so starting the program
-/// again without asking first stacks a second explorer - and a third - on top.
+/// again without asking first stacks a second explorer - and a third - on top. The marker is
+/// the shell's own window, not a folder window: Explorer runs the desktop with `Shell_TrayWnd`
+/// (the task bar) and `Progman` (the desktop) even when no folder window is open, and checking
+/// for a folder window is what made every daemon start open a fresh "This PC" window on top.
 fn explorer_running_on(desktop: &Desktop) -> bool {
-    const EXPLORER_CLASSES: [&str; 2] = ["CabinetWClass", "ExploreWClass"];
+    const EXPLORER_CLASSES: [&str; 2] = ["Shell_TrayWnd", "Progman"];
     match windows::list(&desktop.qualified_name()) {
         Ok(list) => list
             .iter()
@@ -233,6 +247,60 @@ pub fn focus() -> Option<isize> {
 
 pub fn set_focus(hwnd: Option<isize>) {
     with(|s| s.focus = hwnd);
+}
+
+/// Every virtual key that has to be watched so a modifier cannot stay stuck down: the three
+/// generic modifier keys, their left and right spellings, and the two Windows keys.
+const MODIFIER_KEYS: [u16; 11] = [
+    0x10, 0x11, 0x12, // Shift, Control, Alt
+    0x5B, 0x5C, // Meta, RWin
+    0xA0, 0xA1, // LShift, RShift
+    0xA2, 0xA3, // LControl, RControl
+    0xA4, 0xA5, // LAlt, RAlt
+];
+
+/// Rebuilds the modifier bits of the key state from the set the client says is held.
+///
+/// Every event carries the whole held set rather than a delta, so this is self-correcting:
+/// a key-up lost in transit cannot leave a modifier down for the rest of the session.
+pub fn set_modifiers(held: &[u16]) {
+    with(|s| {
+        for vk in MODIFIER_KEYS {
+            s.key_state[vk as usize] &= !0x80;
+        }
+        for &vk in held {
+            press(&mut s.key_state, vk);
+            // Both spellings go down: the protocol names the generic modifier and a target
+            // may look for either it or the side-specific one.
+            for alias in aliases(vk) {
+                press(&mut s.key_state, *alias);
+            }
+        }
+    });
+}
+
+fn press(state: &mut [u8; 256], vk: u16) {
+    if let Some(slot) = state.get_mut((vk & 0xFF) as usize) {
+        *slot |= 0x80;
+    }
+}
+
+/// The generic spelling of a side-specific modifier, and the other way round.
+fn aliases(vk: u16) -> &'static [u16] {
+    match vk {
+        // The generic keys are already the whole story.
+        0x10 | 0x11 | 0x12 | 0x5B => &[],
+        0x5C => &[0x5B],        // RWin -> Meta
+        0xA0 | 0xA1 => &[0x10], // LShift, RShift -> Shift
+        0xA2 | 0xA3 => &[0x11], // LControl, RControl -> Control
+        0xA4 | 0xA5 => &[0x12], // LAlt, RAlt -> Alt
+        _ => &[],
+    }
+}
+
+/// The key state to install on the hidden desktop's input queue before an event.
+pub fn key_state() -> [u8; 256] {
+    with(|s| s.key_state).unwrap_or([0u8; 256])
 }
 
 /// The pid of the program started on the shadow desktop, if it came up.
