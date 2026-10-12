@@ -21,10 +21,9 @@ use winapi::um::winuser::{
     RealChildWindowFromPoint, ScreenToClient, SendInput, SetFocus, SetForegroundWindow,
     WindowFromPoint, GA_ROOT, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
     LPINPUT, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
-    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
-    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SM_CXSCREEN,
-    SM_CYSCREEN, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, SM_CXSCREEN, SM_CYSCREEN, WM_CHAR,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
 };
 
 use super::desktop::AttachedDesktop;
@@ -364,7 +363,7 @@ fn mouse_at_on_thread(
         MouseAction::Down(button) => {
             // A posted click cannot activate a window, and everything the frame owns - the
             // title bar, its buttons, dragging - is decided by Windows, not by the control.
-            activate(target, &mut note);
+            unsafe { activate(target, &mut note) };
             let double = matches!(button, MouseButton::Left) && second_press(x, y);
             HELD_BUTTON.store(button_mask(button), Ordering::SeqCst);
             (
@@ -422,9 +421,9 @@ fn pack(x: i32, y: i32) -> isize {
 
 fn button_mask(button: MouseButton) -> u32 {
     match button {
-        MouseButton::Left => MK_LBUTTON,
-        MouseButton::Right => MK_RBUTTON,
-        MouseButton::Middle => MK_MBUTTON,
+        MouseButton::Left => MK_LBUTTON as u32,
+        MouseButton::Right => MK_RBUTTON as u32,
+        MouseButton::Middle => MK_MBUTTON as u32,
     }
 }
 
@@ -465,12 +464,13 @@ fn second_press(x: i32, y: i32) -> bool {
 /// Brings the window's frame forward. A posted message cannot activate a window, and an
 /// inactive window ignores the click.
 unsafe fn activate(target: HWND, note: &mut String) {
-    let frame = GetAncestor(target, GA_ROOT);
-    let frame = if frame.is_null() { target } else { frame };
-    if SetForegroundWindow(frame) == FALSE {
-        let _ = BringWindowToTop(frame);
-    }
-    note.push_str(&format!("activated {:#x}; ", frame as usize));
+    let (frame, raised) = unsafe {
+        let frame = GetAncestor(target, GA_ROOT);
+        let frame = if frame.is_null() { target } else { frame };
+        let raised = SetForegroundWindow(frame) != FALSE || BringWindowToTop(frame) != FALSE;
+        (frame, raised)
+    };
+    note.push_str(&format!("activated {:#x} ({raised}); ", frame as usize));
 }
 
 /// Posts one half of a keystroke to a window of this desktop.
