@@ -2120,6 +2120,12 @@ impl Connection {
                 self.send(msg_out).await;
             }
 
+            // The shadow desktop, when the setting asks for it: a real virtual monitor comes
+            // up in the background, so the peer is offered the ordinary display list and
+            // captured through the ordinary path instead of a screen of its own.
+            #[cfg(all(windows, feature = "shadow-desktop"))]
+            crate::shadow_desktop::mode::enable_on_login(self.inner.id());
+
             try_activate_screen();
 
             match super::display_service::update_get_sync_displays_on_login().await {
@@ -4536,15 +4542,6 @@ impl Connection {
 
     async fn handle_switch_display(&mut self, s: SwitchDisplay) {
         let display_idx = s.display as usize;
-        // Tell the shadow mode which screen is on view: the entry listed first is the hidden
-        // desktop, everything after it is a real one, and input follows the operator's eyes.
-        #[cfg(all(windows, feature = "shadow-desktop"))]
-        if crate::shadow_desktop::mode::is_active() {
-            // The shadow desktop is the entry listed first; everything after it is a real
-            // screen. The keyboard path has no connection to ask about, so the last switch
-            // is what it goes by.
-            crate::shadow_desktop::mode::set_viewing_shadow_any(display_idx == 0);
-        }
         if self.display_idx != display_idx {
             if let Some(server) = self.server.upgrade() {
                 if !self.switch_display_to(display_idx, server.clone()) {
@@ -5256,6 +5253,8 @@ impl Connection {
         // But it's not necessary now and we have to consider two audio services(client, server).
         crate::audio_service::set_voice_call_input_device(None, true);
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
+        #[cfg(all(windows, feature = "shadow-desktop"))]
+        crate::shadow_desktop::mode::disable_on_close(self.inner.id());
         if lock
             && self.lock_after_session_end
             && self.keyboard
