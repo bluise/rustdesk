@@ -1,32 +1,36 @@
-//! Shadow desktop: a hidden workspace the remote side drives, shown to it through a real
-//! monitor while the machine's own screens are dark.
+//! Shadow desktop: a hidden Windows desktop the remote side can drive while the
+//! machine's own screen shows nothing.
 //!
-//! Three pieces make that work, and nothing else in the host has to know about it:
+//! Only compiled with the `shadow-desktop` feature, and every existing capture, input
+//! and launch path stays exactly as it is without it - this is an addition, not a
+//! rewrite of the host.
 //!
-//! * [`desktop`] opens the hidden desktop inside the interactive window station;
-//! * [`launch`] puts a shell on it, so there is something to work with;
-//! * [`mode`] plugs in a virtual display, takes the physical ones off screen, and switches
-//!   the session to the hidden desktop.
+//! A desktop only draws and takes input while it lives in the *interactive* window
+//! station (`WinSta0`), so the mode has to run inside the user's own session; a service
+//! (session 0) process has to move itself there first, which [`desktop`] does.
 //!
-//! That last switch is what joins the two halves. A monitor shows the session's active
-//! desktop, so the new virtual display shows the hidden workspace - which is why capture,
-//! input, the display list and the switch-screen message are all the ordinary paths, and
-//! the remote side is looking at a real screen through the platform capturer rather than at
-//! a capture path of this module's own.
-//!
-//! Only compiled with the `shadow-desktop` feature, and inert without it.
-#![allow(dead_code)]
+//! Everything here is std + winapi on purpose: `tools/hvnc-probe` compiles these very
+//! files through `#[path]` and is the local compile check and the on-machine proof of
+//! the mechanism, so an extra dependency would break that.
+#![allow(dead_code)] // the mode is not wired into the host yet; drop this once it is.
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
+pub mod capture;
 pub mod desktop;
+pub mod input;
 pub mod launch;
 pub mod mode;
 pub mod windows;
 
 /// The desktop everything in this mode runs on.
 pub const SHADOW_DESKTOP: &str = "RustDeskShadow";
+
+/// What the shadow desktop is called in the display list the client sees. It mimics the
+/// device-name form (`\\.\DISPLAY1`) so it cannot be confused with a real monitor, and the
+/// capture path uses it to tell the two apart.
+pub const SHADOW_DISPLAY_NAME: &str = "\\\\.\\RUSTDESK-SHADOW";
 
 /// NUL-terminated UTF-16, the form every `*W` API here expects.
 pub(crate) fn wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {

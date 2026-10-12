@@ -977,10 +977,40 @@ pub fn try_get_displays_add_amyuni_headless() -> ResultType<Vec<Display>> {
     try_get_displays_(true)
 }
 
+/// Puts the hidden desktop at the head of a display list, when the mode is on.
+///
+/// Both the list the client is offered and the list the capture path enumerates have to
+/// carry it: if only one of them does, capture and input end up on different desktops - the
+/// screen shown is the real one while the clicks go to the hidden one. Callers that already
+/// have a platform list apply this to it, so `Display::all()` keeps being the single source
+/// of what the machine really has.
+///
+/// A no-op without the feature, and a no-op when the mode is off.
+pub fn add_shadow_display(displays: &mut Vec<Display>) {
+    #[cfg(all(windows, feature = "shadow-desktop"))]
+    if crate::shadow_desktop::mode::is_active() {
+        let (width, height) = displays
+            .first()
+            .map(|d| (d.width(), d.height()))
+            .unwrap_or((1920, 1080));
+        displays.insert(
+            0,
+            scrap::Display::virtual_display(
+                crate::shadow_desktop::SHADOW_DISPLAY_NAME,
+                width,
+                height,
+            ),
+        );
+    }
+    #[cfg(not(all(windows, feature = "shadow-desktop")))]
+    let _ = displays;
+}
+
 #[inline]
 #[cfg(windows)]
 pub fn try_get_displays_(add_amyuni_headless: bool) -> ResultType<Vec<Display>> {
     let mut displays = Display::all()?;
+    add_shadow_display(&mut displays);
 
     // Do not add virtual display if the platform is not installed or the virtual display is not supported.
     if !crate::platform::is_installed() || !virtual_display_manager::is_virtual_display_supported()

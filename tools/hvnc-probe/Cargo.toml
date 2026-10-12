@@ -1,0 +1,38 @@
+[package]
+name = "hvnc-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Standalone Windows probe for the hidden-desktop mechanism (RustDesk shadow-desktop, scheme C1)"
+
+# Kept out of the repository workspace on purpose (see the root Cargo.toml).
+# It only builds on Windows, and it must not slow down the real builds.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "winuser",
+    "wingdi",
+    "processthreadsapi",
+    "handleapi",
+    "errhandlingapi",
+    "winbase",
+    "winnt",
+    "basetsd",
+    "minwindef",
+    "ntdef",
+    "windef",
+] }
+
+[[bin]]
+name = "hvnc-probe"
+path = "src/main.rs"
+
+# Standalone workspace root on purpose: without this, cargo walks up to the repository
+# manifest and tries to load every RustDesk member just to build a Windows-only probe.
+[workspace]
+
+# This probe is a command line over the crate's shadow-desktop module and compiles its
+# source through `#[path]` (see src/main.rs), so it is always built with the feature on -
+# the same name as in the crate, so the gating can be copied verbatim.
+[features]
+default = ["shadow-desktop"]
+shadow-desktop = []

@@ -1,40 +1,51 @@
-//! Whether the shadow desktop is on, and the switch that brings it up.
+//! The shadow-desktop session: whether the mode is on, what it owns, and where the remote
+//! pointer and keyboard focus are.
 //!
-//! The mode is one real monitor carrying a hidden workspace, which is two pieces working
-//! together:
+//! A hidden desktop has no real cursor and no foreground window, so both have to be kept
+//! here instead of asked of Windows:
 //!
-//! * a hidden desktop, so the remote side works somewhere the machine's own user is not,
-//!   and somewhere that is not part of any desktop being looked at;
-//! * the host's virtual-display privacy mode, which plugs a real monitor in, makes it
-//!   primary at the origin and takes the physical displays off screen.
+//! * relative mouse events arrive as deltas, so they are accumulated into
+//!   [`cursor`] and turned back into a point on the desktop;
+//! * keyboard input goes to the window the remote side last clicked on, remembered as
+//!   [`focus`].
 //!
-//! [`desktop::Desktop::make_current`] is what joins them: switching the session to the
-//! hidden desktop makes the new monitor show it, and that is why capture, input, the
-//! display list and the switch-screen message all stay the ordinary ones.
-//!
-//! The mode is tied to a connection rather than to the daemon: the local screens go dark
-//! while somebody is connected and come back when that connection ends.
+//! The session also owns the desktop handle, which is what keeps the desktop - and the
+//! program started on it - alive.
 
-use hbb_common::{config::Config, log};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::privacy_mode::{self, PRIVACY_MODE_IMPL_WIN_VIRTUAL_DISPLAY};
-
-use super::{desktop, launch, windows, SHADOW_DESKTOP};
+use super::desktop::Desktop;
+use super::{launch, windows, SHADOW_DESKTOP};
 
 /// Started when the mode comes up: a desktop with nothing on it cannot be worked with.
 pub const DEFAULT_PROGRAM: &str = "explorer.exe";
+/// Frames per second ceiling. PrintWindow redraws every window per frame, so this is the
+/// host's own limit rather than the client's.
+pub const DEFAULT_FPS: u32 = 10;
 
-/// The desktop the local user is on. The mode hands the session back to it before the
-/// physical displays return, so those screens show their own desktop and not the workspace.
-const INTERACTIVE_DESKTOP: &str = "Default";
+/// The size frames are produced at, if the host was told to scale them down.
+///
+/// The desktop itself always keeps the session's resolution: changing that would change the
+/// physical screen, which is the one thing this mode must not do. Scaling the frames only
+/// trades detail for bandwidth and CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameSize {
+    pub width: i32,
+    pub height: i32,
+}
 
 struct Session {
-    /// Closing its last handle destroys the workspace and everything on it, which is what
-    /// gives the next session a clean one.
-    _desktop: desktop::Desktop,
-    /// The connection the mode was brought up for.
-    owner: i32,
+    /// Closing its last handle destroys the desktop and everything on it.
+    _desktop: Desktop,
+    program_pid: Option<u32>,
+    cursor: (i32, i32),
+    focus: Option<isize>,
+    fps: u32,
+    frame_size: Option<FrameSize>,
+    /// The desktop's own size, which relative mouse movement is clamped to.
+    size: (i32, i32),
 }
 
 static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
@@ -43,33 +54,142 @@ fn slot() -> &'static Mutex<Option<Session>> {
     SESSION.get_or_init(|| Mutex::new(None))
 }
 
-/// Whether the mode is on.
+/// Runs `f` on the session, if the mode is on.
+fn with<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
+    slot().lock().ok()?.as_mut().map(f)
+}
+
 pub fn is_active() -> bool {
-    slot().lock().map(|session| session.is_some()).unwrap_or(false)
+    slot()
+        .lock()
+        .map(|session| session.is_some())
+        .unwrap_or(false)
 }
 
-/// The implementation that makes a real monitor, which is the whole point: with it, capture
-/// and input stay on the paths every other screen uses.
-pub fn impl_key() -> &'static str {
-    PRIVACY_MODE_IMPL_WIN_VIRTUAL_DISPLAY
-}
-
-/// Whether this machine can run the mode at all.
+/// Turns the mode on: switch the process into WinSta0, create the desktop, start the
+/// program on it, and remember the frame rate.
 ///
-/// The implementation only appears in the supported list when the virtual display driver is
-/// installed and the self-service is running - and if it did not, asking for "privacy mode"
-/// would silently fall back to a different implementation and cover the local screen with
-/// overlay windows instead of giving the peer a real display.
-pub fn available() -> bool {
-    privacy_mode::get_supported_privacy_mode_impl()
-        .iter()
-        .any(|(key, _)| *key == PRIVACY_MODE_IMPL_WIN_VIRTUAL_DISPLAY)
+/// Doing nothing when it is already on makes this safe to call from wherever the setting is
+/// read.
+pub fn enable(program: Option<&str>, fps: u32, frame_size: Option<FrameSize>) -> Result<(), String> {
+    let mut guard = slot()
+        .lock()
+        .map_err(|_| "shadow session lock is poisoned".to_owned())?;
+    if guard.is_some() {
+        return Ok(());
+    }
+
+    // The process has to sit in WinSta0 for capture and input threads to be able to attach,
+    // and it has to keep sitting there.
+    super::desktop::ensure_process_in_interactive_winsta()?;
+    let desktop = Desktop::create_or_open(SHADOW_DESKTOP)?;
+    let pid = if explorer_running_on(&desktop) {
+        // A daemon restart would otherwise launch another explorer onto a desktop that
+        // keeps every window, so the user ends up with several "This PC" windows.
+        eprintln!("[shadow_desktop] explorer is already on the desktop, not starting another");
+        None
+    } else {
+        let program = program.unwrap_or(DEFAULT_PROGRAM);
+        match launch::spawn_on_desktop(&desktop.qualified_name(), program, &[]) {
+            Ok(pid) => {
+                eprintln!("[shadow_desktop] started {program} on the desktop");
+                Some(pid)
+            }
+            Err(e) => {
+                // The desktop is still usable by hand, so this is not fatal.
+                eprintln!("[shadow_desktop] could not start the program: {e}");
+                None
+            }
+        }
+    };
+
+    *guard = Some(Session {
+        _desktop: desktop,
+        program_pid: pid,
+        cursor: (0, 0),
+        focus: None,
+        fps: fps.max(1),
+        frame_size,
+        size: super::capture::desktop_size(None)?,
+    });
+    Ok(())
 }
 
-/// Why the mode cannot run, for the log and for the operator.
-pub const NOT_AVAILABLE: &str = "no virtual display is available. Install the virtual display driver (RustDesk IDD or usbmmidd) and keep the self-service running, then restart the host";
+/// Whether Windows Explorer already has a window on this desktop.
+///
+/// The desktop and its windows outlive a restart of the daemon, so starting the program
+/// again without asking first stacks a second explorer - and a third - on top.
+fn explorer_running_on(desktop: &Desktop) -> bool {
+    const EXPLORER_CLASSES: [&str; 2] = ["CabinetWClass", "ExploreWClass"];
+    match windows::list(&desktop.qualified_name()) {
+        Ok(list) => list
+            .iter()
+            .any(|w| EXPLORER_CLASSES.iter().any(|c| w.class.eq_ignore_ascii_case(c))),
+        Err(e) => {
+            // A listing that failed is not proof there is none, so start the program the
+            // way this did before the check existed.
+            eprintln!("[shadow_desktop] could not list the desktop's windows: {e}");
+            false
+        }
+    }
+}
 
-/// Whether the setting asks for the mode.
+/// Turns the mode off. Dropping the desktop handle destroys the desktop, which takes the
+/// program started on it with it.
+pub fn disable() {
+    if let Ok(mut guard) = slot().lock() {
+        *guard = None;
+    }
+}
+
+pub fn fps() -> u32 {
+    with(|s| s.fps).unwrap_or(DEFAULT_FPS)
+}
+
+/// The size frames should be scaled to, or `None` to keep the desktop's own resolution.
+pub fn frame_size() -> Option<FrameSize> {
+    with(|s| s.frame_size).flatten()
+}
+
+/// Reads the frame size setting: `WxH`, or `N%` of the desktop's own size.
+///
+/// Anything unusable - including an empty value, which is what an unset option reads as -
+/// means "leave the frames at the desktop's resolution" rather than a guess.
+pub fn parse_frame_size(value: &str, desktop: (i32, i32)) -> Option<FrameSize> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(percent) = value.strip_suffix('%') {
+        let percent: i32 = percent.trim().parse().ok()?;
+        if percent <= 0 {
+            return None;
+        }
+        let (width, height) = desktop;
+        return Some(FrameSize {
+            width: (width * percent / 100).max(1),
+            height: (height * percent / 100).max(1),
+        });
+    }
+    let (width, height) = value.split_once(['x', 'X'])?;
+    let width: i32 = width.trim().parse().ok()?;
+    let height: i32 = height.trim().parse().ok()?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(FrameSize { width, height })
+}
+
+/// Reads the frame rate setting, clamped to something a desktop can actually deliver.
+pub fn parse_fps(value: &str) -> u32 {
+    value
+        .trim()
+        .parse::<u32>()
+        .map(|fps| fps.clamp(1, 60))
+        .unwrap_or(DEFAULT_FPS)
+}
+
+/// Whether the mode should be on.
 ///
 /// An unset option means on: the setting only exists in a build that carries the mode, so
 /// "unset" and "off" would mean the same thing - and then the build would do nothing.
@@ -80,162 +200,83 @@ pub fn wanted(value: &str) -> bool {
     )
 }
 
-/// [`wanted`] applied to the option as it is set right now.
-pub fn wanted_now() -> bool {
-    wanted(&Config::get_option(
-        base::config::keys::OPTION_SHADOW_DESKTOP,
-    ))
+pub fn cursor() -> Option<(i32, i32)> {
+    with(|s| s.cursor)
 }
 
-/// Brings the workspace up for `conn_id`.
+/// The desktop's own size, for clamping relative movement.
+pub fn desktop_size() -> Option<(i32, i32)> {
+    with(|s| s.size)
+}
+
+/// Moves the tracked pointer, clamped to the desktop so it cannot wander off.
+pub fn move_cursor_by(dx: i32, dy: i32, width: i32, height: i32) -> Option<(i32, i32)> {
+    with(|s| {
+        let x = (s.cursor.0 + dx).clamp(0, width.max(1) - 1);
+        let y = (s.cursor.1 + dy).clamp(0, height.max(1) - 1);
+        s.cursor = (x, y);
+        s.cursor
+    })
+}
+
+pub fn set_cursor(point: (i32, i32)) -> Option<(i32, i32)> {
+    with(|s| {
+        s.cursor = point;
+        s.cursor
+    })
+}
+
+/// The window keyboard input should go to: the last one a click landed on.
+pub fn focus() -> Option<isize> {
+    with(|s| s.focus).flatten()
+}
+
+pub fn set_focus(hwnd: Option<isize>) {
+    with(|s| s.focus = hwnd);
+}
+
+/// The pid of the program started on the shadow desktop, if it came up.
+pub fn program_pid() -> Option<u32> {
+    with(|s| s.program_pid).flatten()
+}
+
+/// Which screen each connection is looking at, so input can be routed to where the
+/// operator's eyes are.
 ///
-/// Awaited by the login path in the background: plugging a monitor in takes seconds, which
-/// is far too long to hold a login on.
-pub async fn enable(conn_id: i32) {
-    if is_active() || privacy_mode::is_in_privacy_mode() {
-        log::debug!("shadow desktop: already on, leaving it alone");
-        return;
-    }
-    if !available() {
-        log::error!("shadow desktop is off: {}", NOT_AVAILABLE);
-        return;
-    }
+/// The video side knows this when it picks a capturer; it only has to say so. Until it says
+/// anything, a connection is assumed to be on the hidden desktop, which is the screen listed
+/// first and therefore the one a client lands on by default.
+static VIEWING_SHADOW: OnceLock<Mutex<HashMap<i32, bool>>> = OnceLock::new();
 
-    // The workspace has to exist before the session is switched to it.
-    let workspace = match open_workspace() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            log::error!("shadow desktop could not start: {e}");
-            return;
-        }
-    };
-
-    // A real monitor: the virtual display is plugged in, made primary at the origin, and
-    // the physical displays are moved off screen.
-    let turned_on = privacy_mode::turn_on_privacy(impl_key(), conn_id).await;
-    match turned_on {
-        Some(Ok(true)) => {}
-        other => {
-            log::error!("shadow desktop did not come up: {}", describe(other));
-            return;
-        }
-    }
-
-    // The session goes to the hidden desktop, so the new monitor shows that instead of the
-    // machine's own desktop.
-    if let Err(e) = workspace.make_current() {
-        log::error!("shadow desktop could not switch the session: {e}");
-        let _ = privacy_mode::turn_off_privacy(conn_id, None);
-        return;
-    }
-
-    if let Ok(mut guard) = slot().lock() {
-        *guard = Some(Session {
-            _desktop: workspace,
-            owner: conn_id,
-        });
-    }
-    log::info!(
-        "shadow desktop is on for connection {conn_id}: a real monitor is showing the hidden workspace"
-    );
+fn viewing_shadow() -> &'static Mutex<HashMap<i32, bool>> {
+    VIEWING_SHADOW.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Takes the workspace down, if this module brought it up for `conn_id`.
-pub fn disable(conn_id: i32) {
-    let session = match take_owned(conn_id) {
-        Some(session) => session,
-        None => return,
-    };
-
-    // The local desktop comes back first: restore the displays after that, and the physical
-    // screens show their own desktop instead of flashing the workspace on their way back.
-    match desktop::Desktop::open(INTERACTIVE_DESKTOP) {
-        Ok(local) => {
-            if let Err(e) = local.make_current() {
-                log::error!("shadow desktop could not switch the session back: {e}");
-            }
-        }
-        Err(e) => log::error!("shadow desktop could not open the local desktop: {e}"),
+pub fn set_viewing_shadow(conn: i32, shadow: bool) {
+    if let Ok(mut map) = viewing_shadow().lock() {
+        map.insert(conn, shadow);
     }
-    let _ = privacy_mode::turn_off_privacy(conn_id, None);
-    // Dropping the session closes the workspace's last handle, which destroys it.
-    drop(session);
-    log::info!(
-        "shadow desktop is off for connection {conn_id}: the local desktop and its displays are back"
-    );
 }
 
-/// Brings the mode up for a connection that just logged in, without holding the login.
-pub fn enable_on_login(conn_id: i32) {
-    if !wanted_now() {
-        log::info!("shadow desktop is turned off");
-        return;
-    }
-    tokio::spawn(async move { enable(conn_id).await });
+pub fn is_viewing_shadow(conn: i32) -> bool {
+    viewing_shadow()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&conn).copied())
+        .unwrap_or(true)
 }
 
-/// Takes the mode down when its connection closes.
-pub fn disable_on_close(conn_id: i32) {
-    disable(conn_id);
-}
-
-/// Called once at daemon start.
+/// The same question without a connection to ask about.
 ///
-/// Physical displays that were moved off screen by a run that was killed never come back by
-/// themselves, so the recorded topology is restored before anything else happens.
-pub fn clear_after_crash() {
-    crate::privacy_mode::restore_reg_connectivity(false, true);
+/// Keyboard input arrives without a connection id, and the shadow desktop is one screen
+/// shared by whoever is connected, so the last switch to say which screen is on view is
+/// what the keyboard path goes by.
+static VIEWING_SHADOW_ANY: AtomicBool = AtomicBool::new(true);
+
+pub fn set_viewing_shadow_any(shadow: bool) {
+    VIEWING_SHADOW_ANY.store(shadow, Ordering::SeqCst);
 }
 
-fn take_owned(conn_id: i32) -> Option<Session> {
-    let mut guard = slot().lock().ok()?;
-    match guard.as_ref() {
-        Some(session) if session.owner == conn_id => guard.take(),
-        _ => None,
-    }
-}
-
-/// Opens the hidden desktop and, unless it already has one, starts a shell on it.
-fn open_workspace() -> Result<desktop::Desktop, String> {
-    let workspace = desktop::Desktop::create_or_open(SHADOW_DESKTOP)?;
-    if explorer_running_on(&workspace) {
-        // A desktop keeps its windows, so starting the program again would stack a second
-        // explorer - and a third - on top of the one already there.
-        log::info!("shadow desktop: the workspace already has a shell");
-        return Ok(workspace);
-    }
-    match launch::spawn_on_desktop(&workspace.qualified_name(), DEFAULT_PROGRAM, &[]) {
-        Ok(pid) => log::info!("shadow desktop: started {DEFAULT_PROGRAM} on the workspace ({pid})"),
-        // The workspace is still usable by hand, so this is not fatal.
-        Err(e) => log::warn!("shadow desktop could not start {DEFAULT_PROGRAM}: {e}"),
-    }
-    Ok(workspace)
-}
-
-/// Whether the workspace already has an Explorer window.
-fn explorer_running_on(desktop: &desktop::Desktop) -> bool {
-    const EXPLORER_CLASSES: [&str; 2] = ["CabinetWClass", "ExploreWClass"];
-    match windows::list(&desktop.qualified_name()) {
-        Ok(list) => list.iter().any(|w| {
-            EXPLORER_CLASSES
-                .iter()
-                .any(|class| w.class.eq_ignore_ascii_case(class))
-        }),
-        Err(e) => {
-            // A listing that failed is not proof there is none, so start the program the
-            // way this did before the check existed.
-            log::warn!("shadow desktop could not list the workspace's windows: {e}");
-            false
-        }
-    }
-}
-
-/// What a privacy-mode result means, in one line.
-fn describe(res: Option<hbb_common::ResultType<bool>>) -> String {
-    match res {
-        Some(Ok(false)) => "privacy mode reported it is off".to_owned(),
-        Some(Err(e)) => e.to_string(),
-        None => "privacy mode is not available".to_owned(),
-        Some(Ok(true)) => "ok".to_owned(),
-    }
+pub fn is_viewing_shadow_any() -> bool {
+    VIEWING_SHADOW_ANY.load(Ordering::SeqCst)
 }

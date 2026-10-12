@@ -12,7 +12,7 @@ use winapi::shared::windef::HDESK;
 use winapi::um::winuser::{
     CloseDesktop, CloseWindowStation, CreateDesktopW, GetProcessWindowStation,
     GetUserObjectInformationW, OpenDesktopW, OpenWindowStationW, SetProcessWindowStation,
-    SetThreadDesktop, SwitchDesktop, UOI_NAME,
+    SetThreadDesktop, UOI_NAME,
 };
 
 use super::{last_error, wide};
@@ -90,23 +90,6 @@ impl Desktop {
     /// The form `STARTUPINFOW::lpDesktop` wants: window station *and* desktop.
     pub fn qualified_name(&self) -> String {
         format!("{}\\{}", INTERACTIVE_WINSTA, self.name)
-    }
-
-    /// Hands the session's display and input over to this desktop.
-    ///
-    /// A monitor shows the session's *active* desktop, so this is what makes a freshly
-    /// plugged virtual display show this one instead of the machine's own - and, called on
-    /// the interactive desktop again, what gives the local user their own screen back.
-    pub fn make_current(&self) -> Result<(), String> {
-        let handle = self.handle;
-        let name = self.name.clone();
-        in_interactive_winsta(move || unsafe {
-            if SwitchDesktop(handle) == FALSE {
-                Err(format!("SwitchDesktop({name}) failed: {}", last_error()))
-            } else {
-                Ok(())
-            }
-        })
     }
 }
 
